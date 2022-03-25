@@ -70,5 +70,5 @@ timer_names = [
 Timers = namedtuple("Timers", " ".join(timer_names))
 
 timers = Timers(*[Timer(name=name,
-                        text="Elapsed time: {:0.4f} seconds",
+                        text=f"{name} Elapsed time: {{:0.4f}} seconds",
                         logger=print) for name in timer_names])

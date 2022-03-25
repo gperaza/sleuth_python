@@ -1,0 +1,33 @@
+0:
+  name: Unknown
+  color: 0x282828
+  type: UNC
+1:
+  name: forest
+  color: 0x009900
+2:
+  name: Shrubs
+  color: 0xFFBB22
+3:
+  name: Grasslands
+  color: 0xFFFF4C
+4:
+  name: Agriculture
+  color: 0xF096FF
+5:
+  name: Urban
+  color: 0xFA0000
+  type: URB
+6:
+  name: Bare
+  color: 0xB4B4B4
+7:
+  name: Snow and ice
+  color: 0xF0F0F0
+8:
+  name: Water
+  color: 0x0032C8
+  type: EXC
+9:
+  name: "Other vegetation (Wetland, moss, lichen, mangroves)"
+  color: 0x0096A0

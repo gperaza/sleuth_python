@@ -3,13 +3,16 @@ from timer import timers
 from scenario import Scenario
 from pathlib import Path
 import numpy as np
-from pprint import pprint
+from pprint import pformat
+from grid import igrid_init
+from logconf import logger
+import subprocess
 
 
 def parse_cl():
     parser = argparse.ArgumentParser(
         description='Simulate urban growth with the SLEUTH model.')
-    parser.add_argument('mode',
+    parser.add_argument('-m', '--mode', dest='mode',
                         choices=['calibrate', 'restart',
                                  'test', 'predict'],
                         help="""Mode to run the simulator on.\n
@@ -38,9 +41,14 @@ def parse_cl():
 def main():
     timers.TOTAL_TIME.start()
 
+    githash = subprocess.check_output(
+        ['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
+    logger.info(f'Running pySLEUTH with git hash: {githash}')
+
     # Initialize parameters
     ini_path, mode = parse_cl()
     scenario = Scenario(ini_path, mode)
+    logger.info(pformat(scenario))
 
     # Restore parameterts if restarting
     if scenario.restart:
@@ -48,14 +56,20 @@ def main():
         raise NotImplementedError
 
     # Initialize grid
-    
+    igrid = igrid_init(scenario.input_dir, lc_file=None)
 
     # Initiate PRNG
     prng = np.random.default_rng(seed=scenario.random_seed)
 
-    #
+    # Some log files for stats, should we use dataframes?
+    # open xypoints.log (fpverd2)
+    xypoints_cols = ['%run', 'mc', 'diff', 'breed',
+                     'spread', 'slope', 'road_grav',
+                     'year area']
+    # open slope.log (fpverd3)
+    # open ratio.log (fpverd4)
 
-    pprint(scenario)
+    
 
     timers.TOTAL_TIME.stop()
 

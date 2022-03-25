@@ -1,18 +1,6 @@
 import configparser
 from dataclasses import dataclass
 from pathlib import Path
-import yaml
-
-
-@dataclass
-class LandClass:
-    num: int
-    iD: str
-    name: str
-    idx: int
-    color: int
-    EXC: bool
-    trans: bool
 
 
 @dataclass
@@ -35,7 +23,7 @@ class Scenario:
         config.read(filepath)
 
         self.filename = filepath
-        if mode:
+        if mode is not None:
             self.mode = mode
         else:
             self.mode = config['mode']['MODE']
@@ -49,27 +37,6 @@ class Scenario:
         paths = config['paths']
         self.input_dir = Path(paths['INPUT_DIR'])
         self.output_dir = Path(paths['OUTPUT_DIR'])
-
-        # Look for input files in input dir
-        # Urban
-        self.urban_data_file = list(
-            self.input_dir.glob('*urban*'))
-        self.urban_data_file_count = len(self.urban_data_file)
-        # Road
-        self.road_data_file = list(
-            self.input_dir.glob('*roads*'))
-        self.road_data_file_count = len(self.road_data_file)
-        # Land Use
-        self.land_use_data_file = list(
-            self.input_dir.glob('*landuse*'))
-        self.land_use_data_file_count = len(self.land_use_data_file)
-        # Single files
-        self.excluded_data_file = list(
-            self.input_dir.glob('*excluded*'))[0]
-        self.slope_data_file = list(
-            self.input_dir.glob('*slope*'))[0]
-        self.background_data_file = list(
-            self.input_dir.glob('*hillshade*'))[0]
 
         # Self modification params
         smod = config['self_modification']
@@ -92,24 +59,6 @@ class Scenario:
         pred_date = config['prediction_date']
         self.prediction_start_date = pred_date['START']
         self.prediction_stop_date = pred_date['STOP']
-
-        # Deltatron parameters
-        # Read in class dictionary
-        landclass_f = self.input_dir / 'landclasses.yaml'
-        if landclass_f.exists():
-            # Load classes if def file exists
-            with open(landclass_f, 'r') as f:
-                landclass_dict = yaml.safe_load(f)
-
-            self.num_landuse_classes = len(landclass_dict)
-            # List of land classes
-            self.landuse_class = [
-                self.init_landuse_class(key, val)
-                for key, val in landclass_dict.items()]
-        else:
-            # If not def file, deltatron does not run
-            self.num_landuse_classes = 0
-            self.landuse_class = []
 
         # These are new to track progress
         self.current_run = 0
@@ -142,20 +91,3 @@ class Scenario:
                                                 fallback=0.0),
                      critical=param.getfloat('CRITICAL', fallback=0.0))
         return coef
-
-    def init_landuse_class(self, name, lu_def):
-        if 'type' in lu_def.keys():
-            _type = lu_def['type']
-        else:
-            _type = None
-
-        lu_class = LandClass(
-            num=lu_def['value'],
-            iD=_type,
-            name=name,
-            idx=None,
-            color=lu_def['color'],
-            EXC=(True if _type == 'EXC' else False),
-            trans=(False if _type == 'EXC' else True))
-
-        return lu_class
