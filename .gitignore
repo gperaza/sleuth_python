@@ -1,2 +1,7 @@
 *.tiff
 *.gif
+/Testing.ipynb
+/.ipynb_checkpoints/
+/__pycache__/
+/log
+/output/
