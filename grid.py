@@ -195,7 +195,9 @@ def load_road_raster(input_dir, raster_to_match):
         sys.exit(1)
 
     # Normalize road weights to  0-100
-    roads = (roads*100/roads.max()).astype(roads.dtype)
+    # set values to avoid loosing attrs
+    roads.values =\
+        (roads.values*100/roads.max().item()).astype(roads.dtype)
 
     return roads, road_i, road_j, road_dist
 
@@ -439,6 +441,14 @@ def igrid_init(input_dir,
         landcover = load_landcover_raster(input_dir, raster_to_match,
                                           lc_dict, remap=remap_dict)
         grids.append(landcover)
+
+    # Create empty Z grid where urbanization takes place
+    z = xr.DataArray(
+        data=np.zeros_like(urban[0].values),
+        coords=slope.coords,
+        name='Z'
+    )
+    grids.append(z)
 
     igrid = xr.merge(grids)
     igrid.attrs['nrows'] = slope.shape[0]

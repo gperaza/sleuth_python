@@ -51,7 +51,7 @@ class Timer:
 
 
 timer_names = [
-    "SPREAD_TOTAL_TIME",
+    "SPR_TOTAL",
     "SPR_PHASE1",
     "SPR_PHASE2",
     "SPR_PHASE3",
@@ -62,8 +62,8 @@ timer_names = [
     "DELTA_DELTATRON",
     "DELTA_PHASE1",
     "DELTA_PHASE2",
-    "GRW_GROWTH",
-    "DRV_DRIVER",
+    "GROW",
+    "DRIVER",
     "TOTAL_TIME"
 ]
 

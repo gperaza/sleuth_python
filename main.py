@@ -7,6 +7,9 @@ from pprint import pformat
 from grid import igrid_init
 from logconf import logger
 import subprocess
+from dataclasses import asdict
+import pandas as pd
+import stats
 
 
 def parse_cl():
@@ -52,24 +55,66 @@ def main():
 
     # Restore parameterts if restarting
     if scenario.restart:
-        # Look at main.c line 333-354
+        # Look at main.c line 132-153, 333-354
         raise NotImplementedError
 
     # Initialize grid
     igrid = igrid_init(scenario.input_dir, lc_file=None)
+    logger.info('Grid is using arround {grid.nbytes/(1024**2)} MB')
 
     # Initiate PRNG
     prng = np.random.default_rng(seed=scenario.random_seed)
 
-    # Some log files for stats, should we use dataframes?
-    # open xypoints.log (fpverd2)
-    xypoints_cols = ['%run', 'mc', 'diff', 'breed',
-                     'spread', 'slope', 'road_grav',
-                     'year area']
-    # open slope.log (fpverd3)
-    # open ratio.log (fpverd4)
+    if scenario.mode == 'calibrate':
+        logger.info(f'Total runs: {scenario.total_runs}')
+    # TODO: move this to scenario?
+    last_run_flag = False
+    last_mc_flag = False
+    last_run = total_runs - 1
+    last_mc = scenario.mc_iters - 1
 
-    
+    # Compute base statistics against which calibration will
+    # take place
+    df_actual = stats.stats_init(scenario, igrid)
+
+    if scenario.current_run == 0:
+        # not restarting
+        if scenario.mode != 'predict':
+            # stored in control_stats.log
+            df_control = pd.DataFrame(
+                columns=['Run', 'Product', 'Compare', 'Pop',
+                         'Edges', 'Clusters', 'Size', 'Leesalee',
+                         'slope', 'percent_urban', 'Xmean', 'Ymean',
+                         'Rad', 'Fmatch', 'Diff', 'Brd', 'Sprd',
+                         'Slp', 'RG'])
+        col_names = ['run', 'year', 'index', 'sng', 'sdg',
+                     'sdc', 'og', 'rt', 'pop', 'area', 'edges',
+                     'clusters', 'xmean', 'ymean', 'rad', 'slope',
+                     'cl_size', 'diffus', 'spread', 'breed',
+                     'slp_res', 'rd_grav', '%urban', '%road',
+                     'grw_rate', 'leesalee', 'grw_pix']
+        df_std = pd.DataFrame(columns=col_names)
+        df_avg = pd.DataFrame(columns=col_names)
+    else:
+        # load data frames from previous run
+        df_std = pd.read_csv('std_dev.csv')
+        df_avg = pd.DataFrame('avg.csv')
+    df_coeff = pd.DataFrame(
+        columns=['Run', 'MC', 'Year', 'Diffusion', 'Breed',
+                 'Spread', 'SlopeResist', 'RoadGrav'])
+
+    if scenario.mode == 'predict':
+        # Prediction, set date and coeffs to best values
+        scenario.stop_year = scenario.prediction_stop_date
+
+        scenario.coeffs.current = scenario.coeffs.best_fit
+        scenario.coeffs.saved = scenario.coeffs.best_fit
+
+        driver.driver()
+    else:
+        # Calibration or test, set date to last available in input
+        # Loop over full parameter space
+        pass
 
     timers.TOTAL_TIME.stop()
 
