@@ -52,9 +52,7 @@ class Timer:
 
 timer_names = [
     "SPR_TOTAL",
-    "SPR_PHASE1",
-    "SPR_PHASE2",
-    "SPR_PHASE3",
+    "SPR_PHASE1N3",
     "SPR_PHASE4",
     "SPR_PHASE5",
     "GDIF_WRITEGIF",

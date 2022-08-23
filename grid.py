@@ -8,6 +8,10 @@ from collections import Counter
 from pprint import pformat
 from functools import reduce
 import pandas as pd
+import geopandas as gpd
+from geocube.api.core import make_geocube
+from scipy.spatial import KDTree
+from pathlib import Path
 
 
 def load_raster(fpath, raster_to_match, name=None, squeeze=True):
@@ -114,11 +118,125 @@ def load_slope_raster(input_dir, raster_to_match,
     logger.info(pformat(slope.attrs))
 
     # Validate
-    if slope.min() < 1 or slope.max() > 99:
+    if slope.min().item() < 1 or slope.max().item() > 99:
         logger.error("Slope raster values out of range.")
         sys.exit(1)
 
     return slope
+
+
+def create_road_raster(input_dir, raster_to_match, d_metric=np.inf):
+    # Assuming a vector dataset of roads exists,
+    # which have been obtained from OSM,
+    # with a column named 'weight' indicating road
+    # accesibility, the following codes correspond
+    # to OSM road types
+
+    input_dir = Path(input_dir)
+
+    # https://wiki.openstreetmap.org/wiki/Key:highway
+    road_types_dict = {
+        'motorway': 7,
+        'trunk': 6,
+        'primary': 5,
+        'secondary': 4,
+        'tertiary': 3,
+        'unclassified': 2,
+        'residential': 1,
+        'living_street': 1,
+        'unknown': 1
+    }
+
+    # Load the vector file and keep up to tertiary roads,
+    # as to not confuse SLEUTH with residential roads.
+    edges = gpd.read_file(input_dir / 'roads.gpkg')
+    edges = edges[edges['weight'] > road_types_dict['unclassified']]
+
+    # Burn in roads into raster
+    # Raster to match needs to be in the final intended
+    # projection and bounds, less indexing erros will occur
+    # upon reprojection and clipping.
+    roads = make_geocube(vector_data=edges, measurements=['weight'],
+                         like=raster_to_match, fill=0)['weight']
+
+    # Create bands with nearest roads indices
+    roads.values = roads.values.astype(np.int32)
+    road_idx = np.column_stack(np.where(roads.values > 0))
+    # KDtree for fast neighbor lookup
+    tree = KDTree(road_idx)
+    # Explicitly create raster grid
+    I, J = roads.values.shape
+    grid_i, grid_j = np.meshgrid(range(I), range(J), indexing='ij')
+    # Get coordinate pairs (i,j) to loop over
+    coords = np.column_stack([grid_i.ravel(), grid_j.ravel()])
+    # Find nearest road for every lattice point
+    # p=inf is chebyshev distance (moore neighborhood)
+    dist, idxs = tree.query(coords, p=d_metric)
+    # Create bands
+    dist = dist.reshape(roads.shape).astype(np.int32)
+    road_i = road_idx[:, 0][idxs].reshape(roads.shape).astype(np.int32)
+    road_j = road_idx[:, 1][idxs].reshape(roads.shape).astype(np.int32)
+
+    roads.name = 'roads'
+    road_i = roads.copy(data=road_i)
+    road_i.name = 'road_i'
+    road_j = roads.copy(data=road_j)
+    road_j.name = 'road_j'
+    road_dist = roads.copy(data=dist)
+    road_dist.name = 'dist'
+
+    # Save individual rasters and store metadata
+    # roads_ar.rio.to_raster(data_path / 'roads.tif', dtype=np.int32)
+    fname = input_dir / 'roads.tif'
+    store_metadata(roads, fname)
+    # Road pixel count
+    roads.attrs['num_road_pix'] = (roads > 0).sum().item()
+    roads.attrs['num_nonroad_pix'] = (roads == 0).sum().item()
+    roads.attrs['road_percent'] = roads.attrs['num_road_pix']/roads.size
+    roads.rio.to_raster(fname)
+    logger.info(f"Created/loaded road tif: {fname}")
+    logger.info(pformat(roads.attrs))
+
+    fname = input_dir / 'road_i.tif'
+    store_metadata(road_i, fname, hist=False)
+    road_i.rio.to_raster(fname)
+    logger.info(f"Created/loaded road tif: {fname}")
+    logger.info(pformat(road_i.attrs))
+
+    fname = input_dir / 'road_j.tif'
+    store_metadata(road_j, fname, hist=False)
+    road_j.rio.to_raster(fname)
+    logger.info(f"Created/loaded road tif: {fname}")
+    logger.info(pformat(road_j.attrs))
+
+    fname = input_dir / 'road_dist.tif'
+    store_metadata(road_dist, fname, hist=False)
+    road_dist.rio.to_raster(fname)
+    logger.info(f"Created/loaded road tif: {fname}")
+    logger.info(pformat(road_dist.attrs))
+
+    # Validate
+    if roads.min() < 0:
+        logger.error("Road raster values out of range.")
+        sys.exit(1)
+    if roads.attrs['num_nonroad_pix'] == 0:
+        logger.error('Roads raster is 100% roads.')
+        sys.exit(1)
+    elif roads.attrs['num_road_pix'] == 0:
+        logger.error('Roads raster is 0% roads.')
+        sys.exit(1)
+    match_idxs = (
+        roads.values[road_i.values.ravel(), road_j.values.ravel()] > 0).all()
+    if not match_idxs:
+        logger.error('Road idxs do not match roads.')
+        sys.exit(1)
+
+    # Normalize road weights to  0-100
+    # set values to avoid loosing attrs
+    roads.values =\
+        (roads.values*100/roads.max().item()).astype(roads.dtype)
+
+    return roads, road_i, road_j, road_dist
 
 
 def load_road_raster(input_dir, raster_to_match):
@@ -136,9 +254,8 @@ def load_road_raster(input_dir, raster_to_match):
     In any region some transportation lines may have more affect upon
     urbanization than others. Through road weighting this type of
     influence may be incorporated into the model. The highest road
-    weight will allow a maximum distance, or number of steps, for the
-    new urban center to travel along the road. Weights are in the
-    range (1-100).
+    weight will increase the probability of accepting urbanization.
+    Weights are in the range (1-100).
 
     Parameters
     ----------
@@ -149,9 +266,13 @@ def load_road_raster(input_dir, raster_to_match):
 
     Returns
     -------
-    List
-        List with 4 DataArrays: road pixels, closes road i coordinate,
-        closest road j coordinate, distance to closest road
+    roads: DataArray
+
+    road_i: DataArray
+
+    road_j: DataArray
+
+    road_dist: DataArray
 
     """
 
@@ -240,8 +361,10 @@ def load_excluded_raster(input_dir, raster_to_match,
     rasters_bool = [r > 0 for r in rasters]
 
     excluded = reduce(np.logical_or, rasters_bool).astype(np.int32)
+    orig_attrs = excluded['spatial_ref'].attrs
     # excluded = excluded.where(excluded == 0, 100)
     excluded = xr.where(excluded == 0, excluded, 100, keep_attrs=True)
+    excluded['spatial_ref'].attrs = orig_attrs
     excluded.name = 'excluded'
     logger.info(f"Loaded excluded tifs: {excluded_list}")
     store_metadata(excluded, excluded_list)
@@ -400,7 +523,15 @@ def load_clean_landsat(path):
     lbands = landsat.attrs['long_name']
     landsat = landsat.assign_coords(band=list(lbands))
     landsat.attrs.update(long_name='Landsat')
-    return landsat
+
+    # Clip landsat ro remove nan bands due to UTM projection
+    j_min = np.where(~np.isnan(landsat[0].values[0]))[0].min()
+    j_max = np.where(~np.isnan(landsat[0].values[-1]))[0].max()
+    i_min = np.where(~np.isnan(landsat[0].values[:, -1]))[0].min()
+    i_max = np.where(~np.isnan(landsat[0].values[:, 0]))[0].max()
+
+    # rioxarray automatically adjust the geo transform
+    return landsat[:, i_min:i_max, j_min:j_max]
 
 
 def get_year_fpath(fpath):
@@ -416,12 +547,13 @@ def igrid_init(input_dir,
     # but landsat raster is not actually needed
     # we can potentially change this in the future
     # Search for landsat raster
+    input_dir = Path(input_dir)
     landsat_path = list(input_dir.glob('landsat*.tif'))[0]
     raster_to_match = load_clean_landsat(landsat_path)
 
     # Load rasters into DataArrays
     slope = load_slope_raster(input_dir, raster_to_match)
-    roads, road_i, road_j, road_dist = load_road_raster(
+    roads, road_i, road_j, road_dist = create_road_raster(
         input_dir, raster_to_match)
     excluded = load_excluded_raster(input_dir, raster_to_match)
     urban = load_urban_raster(input_dir, raster_to_match)
@@ -429,18 +561,18 @@ def igrid_init(input_dir,
     grids = [urban, slope, roads, road_i, road_j, road_dist, excluded]
 
     # Search for land class definition file
-    remap_dict = None
-    if lc_file is not None:
-        lc_file = input_dir / lc_file
-        with open(lc_file, 'r') as f:
-            lc_dict = yaml.safe_load(f)
-        if remap_file is not None:
-            remap_file = input_dir / remap_file
-            with open(remap_file, 'r') as f:
-                remap_dict = yaml.safe_load(f)
-        landcover = load_landcover_raster(input_dir, raster_to_match,
-                                          lc_dict, remap=remap_dict)
-        grids.append(landcover)
+    # remap_dict = None
+    # if lc_file is not None:
+    #     lc_file = input_dir / lc_file
+    #     with open(lc_file, 'r') as f:
+    #         lc_dict = yaml.safe_load(f)
+    #     if remap_file is not None:
+    #         remap_file = input_dir / remap_file
+    #         with open(remap_file, 'r') as f:
+    #             remap_dict = yaml.safe_load(f)
+    #     landcover = load_landcover_raster(input_dir, raster_to_match,
+    #                                       lc_dict, remap=remap_dict)
+    #     grids.append(landcover)
 
     # Create empty Z grid where urbanization takes place
     z = xr.DataArray(
@@ -449,6 +581,14 @@ def igrid_init(input_dir,
         name='Z'
     )
     grids.append(z)
+
+    # Create delta grid for temporal urbanization storage
+    delta = xr.DataArray(
+        data=np.zeros_like(urban[0].values),
+        coords=slope.coords,
+        name='delta'
+    )
+    grids.append(delta)
 
     igrid = xr.merge(grids)
     igrid.attrs['nrows'] = slope.shape[0]
