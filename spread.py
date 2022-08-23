@@ -3,6 +3,7 @@ import constants as C
 from functools import reduce
 from scipy.ndimage import convolve
 from timer import timers
+from logconf import logger
 
 
 """
@@ -11,6 +12,113 @@ This module implmentes the 4 phases of urban growth:
 - phase4: Edge growth
 - phase5: Road influenced growth
 """
+
+
+def temp_driver(grid, data_dir):
+    prng = np.random.default_rng()
+
+    coef_diffusion = 10
+    coef_breed = 50
+    coef_spread = 50
+    coef_slope = 10
+    coef_road = 50
+    crit_slope = 50
+    np.copyto(grid.Z.values, grid.urban.sel(year=2019))
+    for year in range(2020, 2040):
+        spread(
+            grid.Z.values, grid.delta.values, grid.slope.values,
+            grid.excluded.values, grid.roads.values, grid.dist.values,
+            grid.road_i.values, grid.road_j.values,
+            coef_diffusion, coef_breed, coef_spread,
+            coef_slope, coef_road, crit_slope, prng)
+        grid.Z.rio.to_raster(data_dir / f'sleuth_slow_{year}.tif')
+
+    coef_diffusion = 20
+    coef_breed = 75
+    coef_spread = 75
+    coef_slope = 10
+    coef_road = 75
+    crit_slope = 50
+    np.copyto(grid.Z.values, grid.urban.sel(year=2019))
+    for year in range(2020, 2040):
+        spread(
+            grid.Z.values, grid.delta.values, grid.slope.values,
+            grid.excluded.values, grid.roads.values, grid.dist.values,
+            grid.road_i.values, grid.road_j.values,
+            coef_diffusion, coef_breed, coef_spread,
+            coef_slope, coef_road, crit_slope, prng)
+        grid.Z.rio.to_raster(data_dir / f'sleuth_usual_{year}.tif')
+
+    coef_diffusion = 30
+    coef_breed = 100
+    coef_spread = 100
+    coef_slope = 10
+    coef_road = 100
+    crit_slope = 50
+    np.copyto(grid.Z.values, grid.urban.sel(year=2019))
+    for year in range(2020, 2040):
+        spread(
+            grid.Z.values, grid.delta.values, grid.slope.values,
+            grid.excluded.values, grid.roads.values, grid.dist.values,
+            grid.road_i.values, grid.road_j.values,
+            coef_diffusion, coef_breed, coef_spread,
+            coef_slope, coef_road, crit_slope, prng)
+        grid.Z.rio.to_raster(data_dir / f'sleuth_fast_{year}.tif')
+
+
+def grow(proc_type,
+         grid,
+         coeffs,
+         crit_slope,
+         start_year, stop_year,
+         current_run, total_runs,
+         current_mc, total_mc):
+    """Loop over simulated years.
+
+    Loop over simulated years.
+
+    """
+    timers.GROW.start()
+
+    if proc_type == 'predicting':
+        current_year = 2021  # Get prediction start date
+    else:
+        current_year = 1990  # Get urban year 0
+
+    # Initialize Z grid
+    # Why SLEUTH aleays initializes to urban index 0?
+    # Does it takes care of these during initialization?
+    np.copyto(grid.Z.values, grid.urban.sel(year=current_year))
+
+    logger.info('******************************************')
+    if proc_type == 'calibrating':
+        logger.info(f'Run = {current_run} of {total_runs}'
+                    f' ({100*current_run/total_runs:8.1f} percent complete)')
+    logger.info(f'Monter Carlo = {current_mc} of {total_mc}')
+    logger.info(f'Current year = {current_year}')
+    logger.info(f'Stop year = {stop_year}')
+
+    while current_year < stop_year:
+        current_year += 1
+        logger.info(f'  {current_year}/{stop_year}')
+
+        # Apply CA rules for current year
+        sng = sdg = sdc = og = rt = pop = 0
+        timers.SPR_TOTAL.start()
+#        sng, sdg, sdc, og, rt, pop, num_grow_pix, avg_slope = spread(
+        _ = spread(
+            grid.Z.values, grid.delta.values, grid.slope.values,
+            grid.excluded.values, grid.roads.values, grid.dist.values,
+            grid.road_i.values, grid.road_j.values,
+            coeffs['diffusion'], coeffs['breed'], coeffs['spread'],
+            coeffs['slope'], coeffs['road'], crit_slope)
+        timers.SPR_TOTAL.stop()
+
+        # Do satistics
+
+        # Do self modification
+
+    timers.GROW.stop()
 
 
 def spread(grd_Z, grd_delta, grd_slope, grd_excluded,
@@ -155,13 +263,18 @@ def phase4(grd_Z, grd_delta, grd_slope, grd_excluded,
     # On the other hand if we look direcly at the non-urban pixels
     # this is no longer "edge" growth, as its neighbors may not be
     # connected.
+    # Here we do it differently, we look only for urban centers, and
+    # apply the spread test to urban centers, instead to all urban pixels.
+    # That way the interpretation of the spread coef is more closely
+    # related to the fraction of urban CENTERS that attempt urbanization,
+    # not to the fraction of total urban pixels that attempt urbanization.
 
     # Loop over pixels or convolution? Original SLEUTH loops over
     # pixels, so convolution can't be worse. But potential improvement
     # if a set of urban pixels is mantained.
-    kernel = np.array([[1,  1, 1],
+    kernel = np.array([[1, 1, 1],
                        [1, -8, 1],
-                       [1,  1, 1]])
+                       [1, 1, 1]])
 
     # Non urban pixels have neighbor values 8-16, while urban
     # pixels have 0-8
@@ -178,11 +291,19 @@ def phase4(grd_Z, grd_delta, grd_slope, grd_excluded,
     sprd_centers = np.logical_and(n_nbrs >= 2, n_nbrs <= 7)
     sprd_ci, sprd_cj = np.where(sprd_centers)
 
-    # Apply breed test
-    mask = prng.integers(101, size=len(sprd_ci)) < coef_spread
+    # Apply breed test, for coef=100, all growth is accepted
+    # Breed coef is the percentage of urban centers (pixels)
+    #  that will attempt to urbanize a neighbor.
+    mask = prng.integers(101, size=len(sprd_ci)) <= coef_spread
     sprd_ci, sprd_cj = sprd_ci[mask], sprd_cj[mask]
 
     # Choose a random neighbor and attempt urbanization
+    # This tries to urbanize a random neighbor, and may fail
+    # even if a different neighbor might succeed.
+    # We can change this behavious and always urbanize if there
+    # is an available neighbor.
+    # If we want to keep the original behaviour we do not need
+    # the whole neighbor list, and this step can be optimized.
     for i, j in zip(sprd_ci, sprd_cj):
         ncoords, mask, fails = urbanizable_nghbrs(
             i, j,

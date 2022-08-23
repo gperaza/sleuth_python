@@ -1,4 +1,3 @@
-import sys
 import rioxarray as rxr
 import xarray as xr
 import numpy as np
@@ -159,6 +158,12 @@ def create_road_raster(input_dir, raster_to_match, d_metric=np.inf):
     roads = make_geocube(vector_data=edges, measurements=['weight'],
                          like=raster_to_match, fill=0)['weight']
 
+    # Remove roads from border to avoid neighbor lookup out of bounds
+    roads.values[0, :] = 0
+    roads.values[:, 0] = 0
+    roads.values[-1, :] = 0
+    roads.values[:, -1] = 0
+
     # Create bands with nearest roads indices
     roads.values = roads.values.astype(np.int32)
     road_idx = np.column_stack(np.where(roads.values > 0))
@@ -235,6 +240,16 @@ def create_road_raster(input_dir, raster_to_match, d_metric=np.inf):
     # set values to avoid loosing attrs
     roads.values =\
         (roads.values*100/roads.max().item()).astype(roads.dtype)
+
+    # Check no roads on border
+    if not (
+            (roads.values[0, :] == 0).all()
+            and (roads.values[:, 0] == 0).all()
+            and (roads.values[-1, :] == 0).all()
+            and (roads.values[:, -1] == 0).all()
+    ):
+        logger.error("Roads on border.")
+        sys.exit(1)
 
     return roads, road_i, road_j, road_dist
 
