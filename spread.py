@@ -4,7 +4,7 @@ from functools import reduce
 from scipy.ndimage import convolve
 from timer import timers
 from logconf import logger
-
+from grid import igrid_init
 
 """
 This module implmentes the 4 phases of urban growth:
@@ -14,7 +14,9 @@ This module implmentes the 4 phases of urban growth:
 """
 
 
-def temp_driver(grid, data_dir):
+def temp_driver(data_dir):
+
+    grid = igrid_init(data_dir)
     prng = np.random.default_rng()
 
     coef_diffusion = 10
