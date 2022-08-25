@@ -11,9 +11,12 @@ import geopandas as gpd
 from geocube.api.core import make_geocube
 from scipy.spatial import KDTree
 from pathlib import Path
+from rasterio.enums import Resampling
+import sys
 
 
-def load_raster(fpath, raster_to_match, name=None, squeeze=True):
+def load_raster(fpath, raster_to_match, name=None, squeeze=True,
+                nodata=np.nan, resampling=Resampling.nearest):
     """Generic function to load a raster as a Data Array
 
     Looks for a raster in fpath and optionally matches transform and
@@ -29,6 +32,8 @@ def load_raster(fpath, raster_to_match, name=None, squeeze=True):
         Name assign to DataArray
     squeeze : bool
         Wether to squeeze the loaded array. Defaults to True.
+    nodata: int or float
+        Value to fill regions not covered during reprojection.
 
     Returns
     -------
@@ -38,12 +43,23 @@ def load_raster(fpath, raster_to_match, name=None, squeeze=True):
 
     raster = rxr.open_rasterio(fpath, default_name=name)
 
-    if 'float' in str(raster.dtype):
-        # Set nodata of float rasters to nan
-        raster = raster.rio.reproject_match(raster_to_match,
-                                            nodata=np.nan)
+    if raster_to_match is None:
+        # Reprojecto to UTM
+        raster = raster.rio.reproject(
+            dst_crs=raster.rio.estimate_utm_crs(),
+            resolution=100,
+            nodata=nodata,
+            resampling=resampling)
     else:
-        raster = raster.rio.reproject_match(raster_to_match)
+        raster = raster.rio.reproject_match(
+            raster_to_match, nodata=nodata, resampling=resampling)
+
+    # if 'float' in str(raster.dtype):
+    #     # Set nodata of float rasters to nan
+    #     raster = raster.rio.reproject_match(raster_to_match,
+    #                                         nodata=np.nan)
+    # else:
+    #     raster = raster.rio.reproject_match(raster_to_match)
 
     if squeeze:
         return raster.squeeze()
@@ -78,7 +94,7 @@ def store_metadata(xarr, fname, hist=True):
     xarr.attrs['max'] = xarr.max().item()
 
 
-def load_slope_raster(input_dir, raster_to_match,
+def load_slope_raster(input_dir, raster_to_match, nodata,
                       raster_name='slope.tif'):
     """Loads raster with slope data into xarray.
 
@@ -105,7 +121,9 @@ def load_slope_raster(input_dir, raster_to_match,
     """
 
     fname = input_dir / raster_name
-    slope = load_raster(fname, raster_to_match, name='slope')
+    slope = load_raster(fname, raster_to_match,
+                        nodata=nodata, name='slope',
+                        resampling=Resampling.average)
     # Slope is must be reescaled to 0-100,
     # Type must be int, zero values have issues, so use ceil
     # Zero slope values have been reported to unrealistically
@@ -338,7 +356,7 @@ def load_road_raster(input_dir, raster_to_match):
     return roads, road_i, road_j, road_dist
 
 
-def load_excluded_raster(input_dir, raster_to_match,
+def load_excluded_raster(input_dir, raster_to_match, nodata,
                          excluded_list=['protected.tif', 'water.tif']):
     """Loads rasters denoting excluded areas.
 
@@ -371,7 +389,9 @@ def load_excluded_raster(input_dir, raster_to_match,
 
     """
 
-    rasters = [load_raster(input_dir / f, raster_to_match)
+    rasters = [load_raster(
+        input_dir / f, raster_to_match,
+        nodata=nodata, resampling=Resampling.mode)
                for f in excluded_list]
     rasters_bool = [r > 0 for r in rasters]
 
@@ -399,7 +419,7 @@ def load_excluded_raster(input_dir, raster_to_match,
     return excluded
 
 
-def load_urban_raster(input_dir, raster_to_match, slug='gisa'):
+def load_urban_raster(input_dir, raster_to_match, nodata, slug='gisa'):
     """Loads rasters denoting urbanized areas.
 
     For calibration, the earliest urban year is used as the seed, and
@@ -429,7 +449,9 @@ def load_urban_raster(input_dir, raster_to_match, slug='gisa'):
     """
     urban_files = sorted(list(input_dir.glob(f'{slug}*.tif')))
     urban_years = [get_year_fpath(f) for f in urban_files]
-    urban_arrays = [load_raster(f, raster_to_match, name='urban')
+    urban_arrays = [load_raster(
+        f, raster_to_match, nodata=nodata, name='urban',
+        resampling=Resampling.mode)
                     for f in urban_files]
 
     year_attr_dict = {}
@@ -563,15 +585,20 @@ def igrid_init(input_dir,
     # we can potentially change this in the future
     # Search for landsat raster
     input_dir = Path(input_dir)
-    landsat_path = list(input_dir.glob('landsat*.tif'))[0]
-    raster_to_match = load_clean_landsat(landsat_path)
+    # landsat_path = list(input_dir.glob('landsat*.tif'))[0]
+    # raster_to_match = load_clean_landsat(landsat_path)
 
     # Load rasters into DataArrays
-    slope = load_slope_raster(input_dir, raster_to_match)
+    # We now load slope first, reprojecting to UTM, with
+    # resolution 100. Then we match the slope raster.
+    # We still need to solve the utm empty bands problem.
+    slope = load_slope_raster(input_dir, raster_to_match=None, nodata=0.0)
     roads, road_i, road_j, road_dist = create_road_raster(
-        input_dir, raster_to_match)
-    excluded = load_excluded_raster(input_dir, raster_to_match)
-    urban = load_urban_raster(input_dir, raster_to_match)
+        input_dir, raster_to_match=slope)
+    excluded = load_excluded_raster(input_dir, raster_to_match=slope,
+                                    nodata=0)
+    urban = load_urban_raster(input_dir, raster_to_match=slope,
+                              nodata=0)
 
     grids = [urban, slope, roads, road_i, road_j, road_dist, excluded]
 
