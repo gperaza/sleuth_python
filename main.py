@@ -7,7 +7,6 @@ from pprint import pformat
 from grid import igrid_init
 from logconf import logger
 import subprocess
-from dataclasses import asdict
 import pandas as pd
 import stats
 

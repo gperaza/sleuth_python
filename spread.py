@@ -2,29 +2,29 @@ import numpy as np
 import constants as C
 from functools import reduce
 from scipy.ndimage import convolve
-from timer import timers
+# from timer import timers
 from logconf import logger
 from stats import compute_stats
 from stats import UrbAttempt, Record
-
-# Must be log outside grow
-# if proc_type == 'calibrating':
-#     logger.info(f'Run = {current_run} of {total_runs}'
-#                 f' ({100*current_run/total_runs:8.1f} percent complete)')
-# logger.info(f'Monter Carlo = {current_mc} of {total_mc}')
-# logger.info(f'Current year = {current_year}')
-# logger.info(f'Stop year = {stop_year}')
+from scipy.stats import pearsonr
 
 
 def driver(run, total_mc, start_year, end_year,
-           urban_seed, true_urban, true_years,
+           grds_urban, urban_years, calibration_stats,
            grd_slope, grd_excluded,
            grd_roads, grd_roads_dist, grd_road_i, grd_road_j,
            coef_diffusion, coef_breed, coef_spread, coef_slope, coef_road,
            crit_slope,
            boom, bust, sens_slope, sens_road, critical_high, critical_low,
-           prng):
-    """ Performs a single run consisting of several montecarlo interations. """
+           prng,
+           out_path=None, write_mc=False, write_records=False):
+    """ Performs a single run consisting of several montecarlo interations.
+
+    Returns
+    -------
+    optimal: float
+        Optimal SLEUTH parameter.
+    """
 
     # Create urbanization attempt data structure to log
     # failed urbanizations
@@ -35,24 +35,24 @@ def driver(run, total_mc, start_year, end_year,
     nyears = end_year - start_year
 
     # Create records to accumulate statistics during growth
-    records = [Record(run=run, year=year, has_true=(year in true_years))
-               for year in year_list]
+    records = [Record(run=run, year=year) for year in year_list]
 
     # Create monte carlo grid to acculate probability of urbanization
     # one grid per simulated year
-    nrows, ncols = urban_seed.shape
+    nrows, ncols = grds_urban[0].shape
     grid_MC = np.zeros((nyears, nrows, ncols))
 
     # Driver MonteCarlo(grd_Z_cumulative)
     for current_mc in range(1, total_mc + 1):
         # Reset the coefficients to current run starting values
-
-        # Reset urbanization attempts data structure
-        urb_attempt.reset()
+        # This is not need, as input values do no change
 
         # Perform simlation from start to end year
-        grow(urban_seed, grid_MC,
-             true_urban, true_years,
+        (coef_diffusion_mod, coef_breed_mod,
+         coef_spread_mod, coef_slope_mod,
+         coef_road_mod) = grow(
+             grid_MC,
+             grds_urban, urban_years,
              grd_slope, grd_excluded,
              grd_roads, grd_roads_dist, grd_road_i, grd_road_j,
              coef_diffusion, coef_breed, coef_spread, coef_slope, coef_road,
@@ -61,20 +61,86 @@ def driver(run, total_mc, start_year, end_year,
              prng,
              records, urb_attempt)
 
-        # Ouput urb attempts
-
     # Normalize probability grid
     grid_MC /= total_mc
 
-    # Output urban MC grids, how to ouput? numpy binary? only if predicting?
+    # Output urban MC grids in native numpy format for postprocessing
+    if write_mc:
+        np.save(out_path / f'MC_run_{run}.npy', grid_MC)
 
-    # stats analysis function
+    # Compute std of records and dump to disk
+    for record in records:
+        record.compute_std()
+    if write_records:
+        records[0].init_output_file(out_path)
+        for record in records:
+            record.write_fields(out_path)
 
-    # Output records
+    # Calculate calibration statistics
+    with open(out_path / 'control.csv', 'a') as f:
+        f.write(f'{run},'
+                f'{coef_diffusion},{coef_breed},{coef_spread},'
+                f'{coef_slope},{coef_road},')
+    osm = optmial_sleuth(records, calibration_stats, urban_years, out_path)
+
+    return osm
 
 
-def grow(urban_seed, grid_MC,
-         true_urban, true_idxs,
+def optmial_sleuth(records, calibration_stats, urban_years, out_path):
+
+    # When calculating the fit statistics, we want to write these
+    # statistics to disk toguether with the initial coefficients that
+    # generated the simulations.
+    # Since they are being written to disk, there is no need to store them
+
+    # The optimal SLEUTH metric is the product of:
+    # compare, pop, edges, clusters, slope, x_mean, and y_mean
+    # Extract mean records for urban years
+    sim_stats = [record.average for record in records
+                 if record.year in urban_years]
+
+    # Compare: ratio of final urbanizations at last control years
+    final_pop_sim = sim_stats[-1].pop
+    final_pop_urb = calibration_stats[-1].pop
+    compare = (min(final_pop_sim, final_pop_urb)
+               / max(final_pop_sim, final_pop_urb))
+
+    # leesalee: mean leesalee metric
+    leesalee = np.mean([s.leesalee for s in sim_stats])
+
+    # Find regression coefficients, ignore seed year
+    metrics_names = ['pop', 'edges', 'clusters', 'mean_cluster_size',
+                     'slope', 'percent_urban', 'xmean', 'ymean', 'rad']
+    osm_metrics_names = ['pop', 'edges', 'clusters', 'slope', 'xmean', 'ymean']
+    metrics = []
+    osm_metrics = []
+    for metric in metrics_names:
+        sim_vals = [getattr(s, metric) for s in sim_stats[1:]]
+        urb_vals = [getattr(s, metric) for s in calibration_stats[1:]]
+        r, _ = pearsonr(sim_vals, urb_vals)**2
+        metrics.append(r)
+        if metric in osm_metrics_names:
+            osm_metrics.append(r)
+
+    # Product of all statistics
+    product = np.prod(metrics) * compare * leesalee
+
+    # Optimal metric
+    osm = np.prod(osm_metrics) * compare
+
+    # Append to control file
+    with open(out_path / 'control.csv', 'a') as f:
+        f.write(f'{compare},{leesalee},')
+        for m in metrics:
+            f.write(f'{m},')
+        f.write(f'{product},{osm}\n')
+
+    # Reurnt the optimal sleuth metric for calibration purposes
+    return osm
+
+
+def grow(grid_MC,
+         grds_urban, urban_years,
          grd_slope, grd_excluded,
          grd_roads, grd_roads_dist, grd_road_i, grd_road_j,
          coef_diffusion, coef_breed, coef_spread, coef_slope, coef_road,
@@ -93,9 +159,9 @@ def grow(urban_seed, grid_MC,
     Each year urbanization is accumulated in its respective
     montecarlo accumulation grid, one gird per year.
 
-    If performing calibration, true_urban contains the ground truth
-    of urbanization for years indicated in true_idxs, so calibration statistics
-    can be calculated when ground truth is available.
+    If performing calibration, grds_urban contains the ground truth
+    of urbanization for years indicated in urban_years, so calibration
+    statistics can be calculated when ground truth is available.
 
     Statistics related to growth and calibration are stored in a record
     data structure. There is a record for each year inside the records list.
@@ -104,6 +170,75 @@ def grow(urban_seed, grid_MC,
     applied at the end of each year.
     The function returns set of coefficients at the end of the simulation.
 
+    Parameters
+    ----------
+    grd_MC : np.array
+        Monte Carlo accumulation grids, stores urbanization counts for
+        each year for each monte carlo simulation.
+    grds_urban: np.array
+        Contains true urbanization for observed years in a (years, nrows, ncols)
+        array. The first element [0] is the taken as the seed.
+    urban_years: List
+        List of years with available true urbanization state
+        stored in grds_urban, with the same order as that of the first dimension
+        on grds_urban.
+    grd_slope : np.array
+        Array with slope values.
+    grd_excluded : np.array
+        Array wich labels excluded regions where urbanization is not allowed.
+    grd_roads : np.array
+        Array with roads labeled by their importance normalized between ??-??.
+    grd_road_dist : np.array
+        Array with each pixels distance to the closest road.
+    grd_road_i : np.array
+        Array with the i coordinate of the closest road.
+    grd_road_j : np.array
+        Array with the j coordinate of the closest road.
+    coef_diffusion : float
+        Diffusion coefficient.
+    coef_breed : float
+        Breed coefficient.
+    coef_spread : float
+        Spread coefficient.
+    coef_slope : float
+        Slope coefficient.
+    coef_road : float
+        Road coefficient.
+    crit_slope : float
+        Critical slope value above which urbanization is rejected.
+    boom : float
+        Constant greater than one that multiplies coefficients after
+        a boom year.
+    bust : float
+        Constant less than one that multiplies coefficients after a bust year.
+    sens_slope : float
+        Slope sensitivity.
+    sens_road : float
+        Road sensitivity.
+    critical_high:
+        Growth rate treshold beyon which a boom is triggered.
+    critical_low:
+        Growth rate treshold below which a bust is triggered.
+    prng : np.random.Generator
+        The random number generator.
+    records: List
+        List of record data structures to store statistics, one per
+        simulated year.
+    urb_attempt : UrbAttempt
+        Data class instance to log urbanization attempt metrics.
+
+    Returns
+    -------
+    coef_diffusion : float
+        Modified diffusion coefficient.
+    coef_breed : float
+        Modified breed coefficient.
+    coef_spread : float
+        Modified spread coefficient.
+    coef_slope : float
+        Modified slope coefficient.
+    coef_road : float
+        Modified road coefficient.
 
     """
 
@@ -111,16 +246,18 @@ def grow(urban_seed, grid_MC,
 
     # The number of years to simulate is dictated by the shape of the MC grid
     nyears = grid_MC.shape[0]
+    # Make sure we have a record per simulated year
     assert nyears == len(records)
 
-    # Initialize Z grid to the seed
-    grd_Z = urban_seed.copy()
+    # Initialize Z grid to the seed (first urban grid)
+    grd_Z = grds_urban[0].copy()
 
     for year in range(nyears):
         record = records[year]
+        # Reset urbanization attempts data structure
+        urb_attempt.reset()
 
         logger.info(f'  {year}|{record.year}/{nyears}')
-        # record.year = year
         record.monte_carlo += 1
 
         # Apply CA rules for current year
@@ -140,6 +277,11 @@ def grow(urban_seed, grid_MC,
         record.this_year.og = og
         record.this_year.rt = rt
         record.this_year.num_growth_pix = num_growth_pix
+        record.this_year.successes = urb_attempt.successes
+        record.this_year.z_failure = urb_attempt.z_failure
+        record.this_year.delta_failure = urb_attempt.delta_failure
+        record.this_year.slope_failure = urb_attempt.slope_failure
+        record.this_year.excluded_failure = urb_attempt.excluded_failure
 
         # Store coefficients
         record.this_year.diffusion = coef_diffusion
@@ -149,8 +291,7 @@ def grow(urban_seed, grid_MC,
         record.this_year.road_gravity = coef_road
 
         # Compute stats
-        (record.this_year.area,
-         record.this_year.edges,
+        (record.this_year.edges,
          record.this_year.clusters,
          record.this_year.pop,
          record.this_year.xmean,
@@ -166,20 +307,17 @@ def grow(urban_seed, grid_MC,
 
         # If there exists a corresponding urban grid,
         # calculate intersection over union for calibration
-        if year in true_idxs:
-            turban = true_urban[true_idxs.index(year)]
+        if record.year in urban_years:
+            grd_urban = grds_urban[urban_years.index(record.year)]
             record.this_year.leesalee = (
-                np.loagical_and(grd_Z, turban).sum(dtype=float)
-                / np.logical_or(grd_Z, turban).sum(dtype=float)
+                np.loagical_and(grd_Z, grd_urban).sum(dtype=float)
+                / np.logical_or(grd_Z, grd_urban).sum(dtype=float)
             )
         else:
             record.this_year.leesalee = 0.0
 
-        # Update mean and sum of squares
-        record.update_mean_std()
-
         # Accumulate MC samples
-        grid_MC[grd_Z > 0] += 1
+        grid_MC[year][grd_Z > 0] += 1
 
         # Do self modification
         (coef_diffusion, coef_breed,
@@ -195,6 +333,9 @@ def grow(urban_seed, grid_MC,
         record.this_year.breed_mod = coef_breed
         record.this_year.slope_resistance_mod = coef_slope
         record.this_year.road_gravity_mod = coef_road
+
+        # Update mean and sum of squares
+        record.update_mean_std()
 
     # timers.GROW.stop()
 
@@ -897,8 +1038,8 @@ def coef_self_modification(
         Constant less than one that multiplies coefficients after a bust year.
     sens_slope : float
         Slope sensitivity.
-    sens_spread : float
-        Spread sensitivity.
+    sens_road : float
+        Road sensitivity.
     growth_rate: float
         Percent of newly urbanized pixels with respect to total urbanization.
     percent_urban: float
