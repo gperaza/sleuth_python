@@ -45,12 +45,11 @@ class StatsVal:
 
 @dataclass
 class Record:
+    year: int
+    monte_carlo: int = 0
     this_year: StatsVal = field(default_factory=StatsVal)
     average: StatsVal = field(default_factory=StatsVal)
     std: StatsVal = field(default_factory=StatsVal)
-    monte_carlo: int = 0
-    year: int
-    run: int
 
     def update_mean_std(self):
         # Update the mean and sum of squares using

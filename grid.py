@@ -2,7 +2,6 @@ import rioxarray as rxr
 import xarray as xr
 import numpy as np
 from logconf import logger
-import yaml
 from collections import Counter
 from pprint import pformat
 from functools import reduce
@@ -10,7 +9,6 @@ import pandas as pd
 import geopandas as gpd
 from geocube.api.core import make_geocube
 from scipy.spatial import KDTree
-from pathlib import Path
 from rasterio.enums import Resampling
 import sys
 
@@ -486,109 +484,24 @@ def load_urban_raster(input_dir, raster_to_match, nodata, slug='gisa'):
     return urban
 
 
-def load_landcover_raster(input_dir, raster_to_match, lc_dict,
-                          slug='copernicus', remap=None):
-    """Loads rasters specifying landcover per pixel.
-
-
-    Parameters
-    ----------
-    input_dir : Path
-        path to raster files
-    raster_to_match : DataArray
-        DataArray with raster to which to match geotransform
-        and bounds
-    lc_dict: dict
-        dictionary mapping pixel values to classes and additional
-        metadata
-    slug: str
-        pattern used to identified files using their filename
-    remap: dict
-        if not none, remap classes using specified dictionary
-
-    Returns
-    -------
-    DataArray
-        DataArray with landcover pixel values
-
-    """
-    lc_files = sorted(list(input_dir.glob(f'{slug}*.tif')))
-    lc_years = [get_year_fpath(f) for f in lc_files]
-    lc_arrays = [load_raster(f, raster_to_match, name='landcover')
-                 for f in lc_files]
-
-    landcover = xr.concat(lc_arrays,
-                          dim=pd.Index(lc_years, name='year'))
-    if remap is not None:
-        landcover = xr.apply_ufunc(lambda x: remap[x],
-                                   landcover, vectorize=True)
-    store_metadata(landcover, lc_files)
-    landcover.attrs['classes'] = lc_dict
-
-    year_attr_dict = {}
-    for year, raster, fname in zip(lc_years, lc_arrays, lc_files):
-        logger.info(f"Loaded landcover tif: {fname}")
-
-        year_attr_dict[year] = {}
-        year_attr_dict[year]['histogram'] = Counter(
-            raster.values.ravel())
-        year_attr_dict[year]['ratios'] = {
-            k: v/raster.size
-            for k, v in year_attr_dict[year]['histogram']
-        }
-
-    landcover.attrs['year_attrs'] = year_attr_dict
-    logger.info(pformat(landcover.attrs))
-
-    # Validate
-    if ((landcover.min() < 0)
-            or (landcover.max() > max(lc_dict.values()))):
-        logger.error("Landcover raster values out of range.")
-        sys.exit(1)
-    if len(lc_years) < 2:
-        logger.error("At least 2 landcover rasters are needed "
-                     "for calibration. Missing input files.")
-        sys.exit(1)
-
-    return landcover
-
-
-def load_clean_landsat(path):
-    """ Auxiliary function to load a landsat raster with
-     correct metadata. """
-    landsat = rxr.open_rasterio(path)
-    lbands = landsat.attrs['long_name']
-    landsat = landsat.assign_coords(band=list(lbands))
-    landsat.attrs.update(long_name='Landsat')
-
-    # Clip landsat ro remove nan bands due to UTM projection
-    j_min = np.where(~np.isnan(landsat[0].values[0]))[0].min()
-    j_max = np.where(~np.isnan(landsat[0].values[-1]))[0].max()
-    i_min = np.where(~np.isnan(landsat[0].values[:, -1]))[0].min()
-    i_max = np.where(~np.isnan(landsat[0].values[:, 0]))[0].max()
-
-    # rioxarray automatically adjust the geo transform
-    return landsat[:, i_min:i_max, j_min:j_max]
-
-
 def get_year_fpath(fpath):
     """ Extract year from an input raster file name. """
     return int(str(fpath).split('-')[-1].split('.')[0])
 
 
-def igrid_init(input_dir,
-               lc_file='landclasses.simple.yaml',
-               remap_file=None):
+def igrid_init(input_dir):
+    # Input dir must be a Path object
 
-    # We choose the landsat raster as the projection to match
-    # but landsat raster is not actually needed
-    # we can potentially change this in the future
-    # Search for landsat raster
-    input_dir = Path(input_dir)
-    # landsat_path = list(input_dir.glob('landsat*.tif'))[0]
-    # raster_to_match = load_clean_landsat(landsat_path)
+    # We now load GHS rasters in Mollweide projection
+    # which is equal area.
+    # GHS rastres are already 100m and must be
+    # processed using the Degree of Urbanizarion methodology
+    # modified for 100m resolution.
 
     # Load rasters into DataArrays
+    # We need to load the GHS raster first as they set
+    # the projection.
+
     # We now load slope first, reprojecting to UTM, with
     # resolution 100. Then we match the slope raster.
     # We still need to solve the utm empty bands problem.

@@ -1,35 +1,29 @@
+import sys
 import argparse
-from timer import timers
-from scenario import Scenario
+import configparser
+# from timer import timers
 from pathlib import Path
 import numpy as np
-from pprint import pformat
 from grid import igrid_init
 from logconf import logger
+from functools import partial
 import subprocess
-import pandas as pd
 import stats
+import spread
 
 
 def parse_cl():
     parser = argparse.ArgumentParser(
         description='Simulate urban growth with the SLEUTH model.')
-    parser.add_argument('-m', '--mode', dest='mode',
-                        choices=['calibrate', 'restart',
-                                 'test', 'predict'],
+    parser.add_argument('mode',
+                        choices=['calibrate', 'predict'],
                         help="""Mode to run the simulator on.\n
-      TEST mode will perform a single run through the historical
-            data using the start values to initialize
-            growth, complete the mc interations, and then conclude
-            execution.\n
       CALIBRATE will perform monte carlo runs through the
             historical data using every combination of the coefficient
             values indicated for all possible permutations of given
             ranges and increments.\n
       PREDICTION will perform a single run, in monte carlo
-            fashion, using the BEST_FIT values for initialization.\n
-      RESTART will resume calibration from saved state.
-            (Not implemented.)""")
+            fashion, using the BEST_FIT values for initialization.""")
     parser.add_argument('scenario_file',
                         help='Path to file with configuration.')
 
@@ -41,7 +35,7 @@ def parse_cl():
 
 
 def main():
-    timers.TOTAL_TIME.start()
+    # timers.TOTAL_TIME.start()
 
     githash = subprocess.check_output(
         ['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
@@ -49,73 +43,154 @@ def main():
 
     # Initialize parameters
     ini_path, mode = parse_cl()
-    scenario = Scenario(ini_path, mode)
-    logger.info(pformat(scenario))
+    logger.info(f'Excecuting in mode: {mode}')
 
-    # Restore parameterts if restarting
-    if scenario.restart:
-        # Look at main.c line 132-153, 333-354
-        raise NotImplementedError
+    logger.info(f'Loading configuration file: {ini_path}')
+    config = configparser.ConfigParser()
+    config.read(ini_path)
+    input_dir = Path(config['DEFAULT']['INPUT_DIR'])
+    logger.info(f'Input directory: {input_dir}')
+    output_dir = Path(config['DEFAULT']['OUTPUT_DIR'])
+    logger.info(f'Output directory: {output_dir}')
+    random_seed = config['DEFAULT'].getint('RANDOM_SEED')
+    logger.info(f'Random seed: {random_seed}')
+    mc_iters = config['DEFAULT'].getint('MONTE_CARLO_ITERS')
+    logger.info(f'Number of monte carlo iterations: {mc_iters}')
+    coef_diffusion = config['COEFFICIENTS'].getint('DIFFUSION')
+    logger.info(f'Diffusions coefficient: {coef_diffusion}')
+    coef_breed = config['COEFFICIENTS'].getint('BREED')
+    logger.info(f'Breed coefficient: {coef_breed}')
+    coef_spread = config['COEFFICIENTS'].getint('SPREAD')
+    logger.info(f'Spread coefficient: {coef_spread}')
+    coef_slope = config['COEFFICIENTS'].getint('SLOPE')
+    logger.info(f'Slope coefficient: {coef_slope}')
+    critical_slope = config['COEFFICIENTS'].getfloat('CRITICAL_SLOPE')
+    logger.info(f'Critical slope value: {critical_slope}')
+    coef_road = config['COEFFICIENTS'].getint('ROAD')
+    logger.info(f'Road coefficient: {coef_road}')
+    stop_year = config['DEFAULT'].getint('STOP_YEAR')
+    logger.info(f'End of simulation year: {stop_year}')
+    do_self_mod = config['SELF MODIFICATION'].getboolean('SELF_MOD')
+    logger.info(f'Enable self modification: {do_self_mod}')
+    critical_low = config['SELF MODIFICATION'].getfloat('CRITICAL_LOW')
+    logger.info(f'Critical low self modification treshold: {critical_low}')
+    critical_high = config['SELF MODIFICATION'].getfloat('CRITICAL_HIGH')
+    logger.info(f'Critical high self modification treshold: {critical_high}')
+    boom = config['SELF MODIFICATION'].getfloat('BOOM')
+    logger.info(f'Boom self modification multiplier: {boom}')
+    bust = config['SELF MODIFICATION'].getfloat('BUST')
+    logger.info(f'Bust self modification multiplier: {bust}')
+    road_sensitivity = config['SELF MODIFICATION'].getfloat('ROAD_SENS')
+    logger.info(f'Road sensitivity (self modification): {road_sensitivity}')
+    slope_sensitivity = config['SELF MODIFICATION'].getfloat('SLOPE_SENS')
+    logger.info(f'Slope sensitivity (self modification): {slope_sensitivity}')
+    optimizer = config['DEFAULT']['OPTIMIZER']
+    logger.info(f'Optimizer: {optimizer}')
 
     # Initialize grid
-    igrid = igrid_init(scenario.input_dir, lc_file=None)
-    logger.info('Grid is using arround {grid.nbytes/(1024**2)} MB')
+    igrid = igrid_init(input_dir, lc_file=None)
+    logger.info(f'Grid is using arround {igrid.nbytes/(1024**2)} MB')
+    sys.exit(1)
 
     # Initiate PRNG
-    prng = np.random.default_rng(seed=scenario.random_seed)
+    prng = np.random.default_rng(seed=random_seed)
 
-    if scenario.mode == 'calibrate':
-        logger.info(f'Total runs: {scenario.total_runs}')
-    # TODO: move this to scenario?
-    last_run_flag = False
-    last_mc_flag = False
-    last_run = total_runs - 1
-    last_mc = scenario.mc_iters - 1
+    # Compute base statistics against which calibration will take place
+    base_stats, urban_years = stats.compute_base_stats(igrid, output_dir)
 
-    # Compute base statistics against which calibration will
-    # take place
-    df_actual = stats.stats_init(scenario, igrid)
-
-    if scenario.current_run == 0:
-        # not restarting
-        if scenario.mode != 'predict':
-            # stored in control_stats.log
-            df_control = pd.DataFrame(
-                columns=['Run', 'Product', 'Compare', 'Pop',
-                         'Edges', 'Clusters', 'Size', 'Leesalee',
-                         'slope', 'percent_urban', 'Xmean', 'Ymean',
-                         'Rad', 'Fmatch', 'Diff', 'Brd', 'Sprd',
-                         'Slp', 'RG'])
-        col_names = ['run', 'year', 'index', 'sng', 'sdg',
-                     'sdc', 'og', 'rt', 'pop', 'area', 'edges',
-                     'clusters', 'xmean', 'ymean', 'rad', 'slope',
-                     'cl_size', 'diffus', 'spread', 'breed',
-                     'slp_res', 'rd_grav', '%urban', '%road',
-                     'grw_rate', 'leesalee', 'grw_pix']
-        df_std = pd.DataFrame(columns=col_names)
-        df_avg = pd.DataFrame(columns=col_names)
+    if mode == 'calibrate':
+        start_year = urban_years[0]
+        stop_year = urban_years[-1]
+        write_mc = False
+        calibrating = True
+        write_records = False
+    elif mode == 'predicting':
+        start_year = urban_years[-1]
+        write_mc = True
+        calibrating = False
+        write_records = True
     else:
-        # load data frames from previous run
-        df_std = pd.read_csv('std_dev.csv')
-        df_avg = pd.DataFrame('avg.csv')
-    df_coeff = pd.DataFrame(
-        columns=['Run', 'MC', 'Year', 'Diffusion', 'Breed',
-                 'Spread', 'SlopeResist', 'RoadGrav'])
+        raise ValueError("Mode not supported.")
 
-    if scenario.mode == 'predict':
-        # Prediction, set date and coeffs to best values
-        scenario.stop_year = scenario.prediction_stop_date
+    # Create a partial function that only accepts coefficient values
+    driver = partial(
+        spread.driver,
+        total_mc=mc_iters,
+        start_year=start_year,
+        end_year=stop_year,
+        calibrating=calibrating,
+        grds_urban=igrid,
+        urban_years=urban_years,
+        calibration_stats=base_stats,
+        grd_slope=igrid,
+        grd_excluded=igrid,
+        grd_roads=igrid,
+        grd_roads_dist=igrid,
+        grd_road_i=igrid,
+        grd_road_j=igrid,
+        crit_slope=critical_slope,
+        boom=boom,
+        bust=bust,
+        sens_slope=slope_sensitivity,
+        sens_road=road_sensitivity,
+        critical_high=critical_high,
+        critical_low=critical_low,
+        prng=prng,
+        out_path=output_dir,
+        write_mc=write_mc,
+        write_records=write_records
+    )
 
-        scenario.coeffs.current = scenario.coeffs.best_fit
-        scenario.coeffs.saved = scenario.coeffs.best_fit
+    # Simple test, debugging
+    osm = driver(
+        coef_diffusion=coef_diffusion,
+        coef_breed=coef_breed,
+        coef_spread=coef_spread,
+        coef_slope=coef_slope,
+        coef_road=coef_road
+    )
+    print(osm)
 
-        driver.driver()
-    else:
-        # Calibration or test, set date to last available in input
-        # Loop over full parameter space
-        pass
+    # timers.TOTAL_TIME.stop()
 
-    timers.TOTAL_TIME.stop()
+
+def optimize_dummy():
+    # Dummy function to test,
+    # Runs a single set of random coefficients
+    pass
+
+
+def optimize_gridded():
+    # Hierarchichal gridded calibration
+    # This is the original caribration method of SLEUTH
+    pass
+
+
+def optimize_brute_full():
+    # Test all integer coefficient values
+    # HUGE seach space, VERY expensive
+    pass
+
+
+def optimize_ax():
+    # Bayesian optimization with Facebook's Ax
+    # Create evaluation function
+
+    # Create tunable parameters
+
+    # Peform optimization
+
+    pass
+
+
+def optimize_cd():
+    # Simple coordinate descent
+    pass
+
+
+def optimize_local_search():
+    # Local hill climbing
+    pass
 
 
 if __name__ == '__main__':

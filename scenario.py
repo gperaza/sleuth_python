@@ -4,42 +4,6 @@ from pathlib import Path
 from collections import OrderedDict
 
 
-# @dataclass
-# class Coeff:
-#     start: int
-#     stop: int
-#     step: int
-#     saved: int
-#     current: int
-#     best_fit: int
-#     sensitivity: float
-#     critical: float
-
-#     # def __str__(self):
-#     #     name = type(self).__name__
-#     #     vars_list = [f'{key}={str(value)}'
-#     #                  for key, value in vars(self).items()]
-#     #     vars_str = '\n'.join(vars_list)
-#     #     return f'{name}\n{vars_str}'
-
-#     def __repr__(self):
-#         from pprint import pformat
-#         return pformat(vars(self), indent=2)
-
-
-# @dataclass
-# class Coeffs:
-#     diffusion: Coeff
-#     breed: Coeff
-#     spread: Coeff
-#     slope_resistance: Coeff
-#     road_gravity: Coeff
-
-#     def __repr__(self):
-#         from pprint import pformat
-#         return pformat(vars(self))
-
-
 @dataclass
 class Coeffs:
     start: dict
@@ -50,13 +14,6 @@ class Coeffs:
     best_fit: dict
     sensitivity: dict
     critical: dict
-
-    # def __str__(self):
-    #     name = type(self).__name__
-    #     vars_list = [f'{key}={str(value)}'
-    #                  for key, value in vars(self).items()]
-    #     vars_str = '\n'.join(vars_list)
-    #     return f'{name}\n{vars_str}'
 
     def __repr__(self):
         from pprint import pformat
@@ -75,12 +32,7 @@ class Scenario:
             self.mode = mode
         else:
             self.mode = config['mode']['MODE']
-        assert self.mode in ['test', 'calibrate',
-                             'predict', 'restart']
-        self.restart = False
-        if self.mode == 'restart':
-            self.restart = True
-            self.mode = 'calibrate'
+        assert self.mode in ['calibrate', 'predict']
 
         paths = config['paths']
         self.input_dir = Path(paths['INPUT_DIR'])
@@ -97,8 +49,6 @@ class Scenario:
         mc = config['MC']
         self.random_seed = mc.getint('RANDOM_SEED')
         self.mc_iters = mc.getint('MONTE_CARLO_ITERS')
-        # This defines the search grid for paramerers
-        # and initial values
 
         # Simulation coefficients
         self.coeffs = Coeffs(
@@ -110,28 +60,10 @@ class Scenario:
             best_fit=self.init_coeffs(config, 'BEST_FIT'),
             sensitivity=self.init_coeffs(config, 'SENSITIVITY'),
             critical=self.init_coeffs(config, 'CRITICAL'))
-        # self.coeffs = Coeffs(
-        #     diffusion=self.init_coeff(config['DIFFUSION']),
-        #     breed=self.init_coeff(config['BREED']),
-        #     spread=self.init_coeff(config['SPREAD']),
-        #     slope_resistance=self.init_coeff(config['SLOPE']),
-        #     road_gravity=self.init_coeff(config['ROAD'])
-        # )
 
         pred_date = config['prediction_date']
         self.prediction_start_date = pred_date['START']
         self.prediction_stop_date = pred_date['STOP']
-
-        # These are new to track progress
-        self.current_run = 0
-        self.total_runs = self.calc_total_runs()
-        self.current_monte_carlo = 0
-        self.current_year = 0
-        self.stop_year = 0
-        # These are a mistery
-        self.aux_diffusion_coeff = -1
-        self.aux_breed_coeff = -1
-        self.aux_diffusion_mult = -1
 
     def calc_total_runs(self):
         truns = 1
@@ -169,15 +101,3 @@ class Scenario:
                 coeffs[param.lower()] =\
                     config[param].getint(field, fallback=0)
         return coeffs
-
-        # def init_coeff(self, param):
-    #     coef = Coeff(start=param.getint('START'),
-    #                  stop=param.getint('STOP'),
-    #                  step=param.getint('STEP'),
-    #                  current=0,
-    #                  saved=0,
-    #                  best_fit=param.getint('BEST_FIT'),
-    #                  sensitivity=param.getfloat('SENSITIVITY',
-    #                                             fallback=0.0),
-    #                  critical=param.getfloat('CRITICAL', fallback=0.0))
-    #     return coef

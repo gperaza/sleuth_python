@@ -9,7 +9,7 @@ from stats import UrbAttempt, Record
 from scipy.stats import pearsonr
 
 
-def driver(run, total_mc, start_year, end_year,
+def driver(total_mc, start_year, end_year, calibrating,
            grds_urban, urban_years, calibration_stats,
            grd_slope, grd_excluded,
            grd_roads, grd_roads_dist, grd_road_i, grd_road_j,
@@ -17,7 +17,7 @@ def driver(run, total_mc, start_year, end_year,
            crit_slope,
            boom, bust, sens_slope, sens_road, critical_high, critical_low,
            prng,
-           out_path=None, write_mc=False, write_records=False):
+           out_path, write_mc=False, write_records=False):
     """ Performs a single run consisting of several montecarlo interations.
 
     Returns
@@ -35,7 +35,7 @@ def driver(run, total_mc, start_year, end_year,
     nyears = end_year - start_year
 
     # Create records to accumulate statistics during growth
-    records = [Record(run=run, year=year) for year in year_list]
+    records = [Record(year=year) for year in year_list]
 
     # Create monte carlo grid to acculate probability of urbanization
     # one grid per simulated year
@@ -66,7 +66,7 @@ def driver(run, total_mc, start_year, end_year,
 
     # Output urban MC grids in native numpy format for postprocessing
     if write_mc:
-        np.save(out_path / f'MC_run_{run}.npy', grid_MC)
+        np.save(out_path / 'MC.npy', grid_MC)
 
     # Compute std of records and dump to disk
     for record in records:
@@ -77,11 +77,14 @@ def driver(run, total_mc, start_year, end_year,
             record.write_fields(out_path)
 
     # Calculate calibration statistics
-    with open(out_path / 'control.csv', 'a') as f:
-        f.write(f'{run},'
-                f'{coef_diffusion},{coef_breed},{coef_spread},'
-                f'{coef_slope},{coef_road},')
-    osm = optmial_sleuth(records, calibration_stats, urban_years, out_path)
+    # The modified coefficients are extracted
+    # from the last oberseved year average record.
+    osm = None
+    if calibrating:
+        with open(out_path / 'control.csv', 'a') as f:
+            f.write(f'{coef_diffusion},{coef_breed},{coef_spread},'
+                    f'{coef_slope},{coef_road},')
+        osm = optmial_sleuth(records, calibration_stats, urban_years, out_path)
 
     return osm
 
@@ -98,6 +101,26 @@ def optmial_sleuth(records, calibration_stats, urban_years, out_path):
     # Extract mean records for urban years
     sim_stats = [record.average for record in records
                  if record.year in urban_years]
+    sim_stds = [record.std for record in records
+                if record.year in urban_years]
+
+    # Write modified coefficients from record corresponding to the
+    # last urban year.
+    diffusion_mod = sim_stats[-1].diffusion_mod
+    spread_mod = sim_stats[-1].spread_mod
+    breed_mod = sim_stats[-1].breed_mod
+    slope_resistance_mod = sim_stats[-1].slope_resistance_mod
+    road_gravity_mod = sim_stats[-1].road_gravity_mod
+    diffusion_std = sim_stds[-1].diffusion_mod
+    spread_std = sim_stds[-1].spread_mod
+    breed_std = sim_stds[-1].breed_mod
+    slope_resistance_std = sim_stds[-1].slope_resistance_mod
+    road_gravity_std = sim_stds[-1].road_gravity_mod
+    with open(out_path / 'control.csv', 'a') as f:
+        f.write(f'{diffusion_mod},{spread_mod},{breed_mod},'
+                f'{slope_resistance_mod},{road_gravity_mod},'
+                f'{diffusion_std},{spread_std},{breed_std},'
+                f'{slope_resistance_std},{road_gravity_std},')
 
     # Compare: ratio of final urbanizations at last control years
     final_pop_sim = sim_stats[-1].pop
