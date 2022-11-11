@@ -10,6 +10,8 @@ from functools import partial
 import subprocess
 import stats
 import spread
+from ax.service.managed_loop import optimize
+from itertools import product
 
 
 def parse_cl():
@@ -88,9 +90,8 @@ def main():
     logger.info(f'Optimizer: {optimizer}')
 
     # Initialize grid
-    igrid = igrid_init(input_dir, lc_file=None)
-    logger.info(f'Grid is using arround {igrid.nbytes/(1024**2)} MB')
-    sys.exit(1)
+    igrid = igrid_init(input_dir)
+    logger.info(f'Grid is using arround {int(igrid.nbytes/(1024**2))} MB')
 
     # Initiate PRNG
     prng = np.random.default_rng(seed=random_seed)
@@ -104,6 +105,16 @@ def main():
         write_mc = False
         calibrating = True
         write_records = False
+        # Create control file
+        with open(output_dir / 'control.csv', 'w') as f:
+            # Write header
+            f.write('Diffusion,Breed,Spread,Slope,Road,'
+                    'Diffusion_mod,Breed_mod,Spread_mod,Slope_mod,Road_mod,'
+                    'Diffusion_std,Breed_std,Spread_std,Slope_std,Road_std,'
+                    'Compare,Leesalee,pop,edges,clusters,mean_clust_size,'
+                    'avg_slope,percent_urban,xmean,ymean,rad,'
+                    'product,osm\n')
+
     elif mode == 'predicting':
         start_year = urban_years[-1]
         write_mc = True
@@ -119,15 +130,15 @@ def main():
         start_year=start_year,
         end_year=stop_year,
         calibrating=calibrating,
-        grds_urban=igrid,
+        grds_urban=igrid['urban'].values,
         urban_years=urban_years,
         calibration_stats=base_stats,
-        grd_slope=igrid,
-        grd_excluded=igrid,
-        grd_roads=igrid,
-        grd_roads_dist=igrid,
-        grd_road_i=igrid,
-        grd_road_j=igrid,
+        grd_slope=igrid['slope'].values,
+        grd_excluded=igrid['excluded'].values,
+        grd_roads=igrid['roads'].values,
+        grd_roads_dist=igrid['dist'].values,
+        grd_road_i=igrid['road_i'].values,
+        grd_road_j=igrid['road_j'].values,
         crit_slope=critical_slope,
         boom=boom,
         bust=bust,
@@ -141,35 +152,91 @@ def main():
         write_records=write_records
     )
 
-    # Simple test, debugging
-    osm = driver(
-        coef_diffusion=coef_diffusion,
-        coef_breed=coef_breed,
-        coef_spread=coef_spread,
-        coef_slope=coef_slope,
-        coef_road=coef_road
-    )
-    print(osm)
+    if calibrating:
+        # SE is unknown so just partial driver, it returns osm as float.
+        def driver_eval_f(parameterization):
+            diffusion = parameterization.get('diffusion')
+            breed = parameterization.get('breed')
+            spread = parameterization.get('spread')
+            slope = parameterization.get('slope')
+            road = parameterization.get('road')
+            osm = driver(coef_diffusion=diffusion,
+                         coef_breed=breed,
+                         coef_spread=spread,
+                         coef_slope=slope,
+                         coef_road=road)
+            return osm
+
+        best_parameters, values, experiment, model = optimize(
+            parameters=[
+                {'name': 'diffusion',
+                 'type': 'range',
+                 'bounds': [1.0, 100.0],
+                 'value_type': 'float',
+                 },
+                {'name': 'breed',
+                 'type': 'range',
+                 'bounds': [1.0, 100.0],
+                 'value_type': 'float',
+                 },
+                {'name': 'spread',
+                 'type': 'range',
+                 'bounds': [1.0, 100.0],
+                 'value_type': 'float',
+                 },
+                {'name': 'slope',
+                 'type': 'range',
+                 'bounds': [1.0, 100.0],
+                 'value_type': 'float',
+                 },
+                {'name': 'road',
+                 'type': 'range',
+                 'bounds': [1.0, 100.0],
+                 'value_type': 'float',
+                 }
+            ],
+            experiment_name="sleuth",
+            objective_name="osm",
+            evaluation_function=driver_eval_f,
+            minimize=False,
+            total_trials=100
+        )
+        print(best_parameters)
+        print(values)
 
     # timers.TOTAL_TIME.stop()
 
 
-def optimize_dummy():
-    # Dummy function to test,
-    # Runs a single set of random coefficients
-    pass
-
-
-def optimize_gridded():
+def optimize_gridded(eval_f):
     # Hierarchichal gridded calibration
     # This is the original caribration method of SLEUTH
-    pass
 
-
-def optimize_brute_full():
-    # Test all integer coefficient values
-    # HUGE seach space, VERY expensive
-    pass
+    test_points = [1, 25, 50, 75, 100]
+    best_osm = 0
+    best_diffusion = 0
+    best_breed = 0
+    best_spread = 0
+    best_slope = 0
+    best_road = 0
+    i = 0
+    for diff, breed, sprd, slp, rd in product(test_points, repeat=5):
+        i += 1
+        if i % 10 == 0:
+            print(f'{i}/3125')
+        osm = eval_f(coef_diffusion=diff,
+                     coef_breed=breed,
+                     coef_spread=sprd,
+                     coef_slope=slp,
+                     coef_road=rd)
+        if osm > best_osm:
+            best_osm = osm
+            best_diffusion = diff
+            best_breed = breed
+            best_spread = sprd
+            best_slope = slp
+            best_road = rd
+            print(f'New best: osm={best_osm}')
+    return best_diffusion, best_breed, best_spread, best_slope, best_road
 
 
 def optimize_ax():

@@ -1,9 +1,9 @@
 import numpy as np
-import constants as C
+# import constants as C
 from functools import reduce
 from scipy.ndimage import convolve
 # from timer import timers
-from logconf import logger
+# from logconf import logger
 from stats import compute_stats
 from stats import UrbAttempt, Record
 from scipy.stats import pearsonr
@@ -84,12 +84,13 @@ def driver(total_mc, start_year, end_year, calibrating,
         with open(out_path / 'control.csv', 'a') as f:
             f.write(f'{coef_diffusion},{coef_breed},{coef_spread},'
                     f'{coef_slope},{coef_road},')
-        osm = optmial_sleuth(records, calibration_stats, urban_years, out_path)
+        osm = optimial_sleuth(
+            records, calibration_stats, urban_years, out_path)
 
     return osm
 
 
-def optmial_sleuth(records, calibration_stats, urban_years, out_path):
+def optimial_sleuth(records, calibration_stats, urban_years, out_path):
 
     # When calculating the fit statistics, we want to write these
     # statistics to disk toguether with the initial coefficients that
@@ -138,9 +139,11 @@ def optmial_sleuth(records, calibration_stats, urban_years, out_path):
     metrics = []
     osm_metrics = []
     for metric in metrics_names:
-        sim_vals = [getattr(s, metric) for s in sim_stats[1:]]
+        # simulation skips seed year
+        sim_vals = [getattr(s, metric) for s in sim_stats]
         urb_vals = [getattr(s, metric) for s in calibration_stats[1:]]
-        r, _ = pearsonr(sim_vals, urb_vals)**2
+        r, _ = pearsonr(sim_vals, urb_vals)
+        r = r**2
         metrics.append(r)
         if metric in osm_metrics_names:
             osm_metrics.append(r)
@@ -199,12 +202,13 @@ def grow(grid_MC,
         Monte Carlo accumulation grids, stores urbanization counts for
         each year for each monte carlo simulation.
     grds_urban: np.array
-        Contains true urbanization for observed years in a (years, nrows, ncols)
-        array. The first element [0] is the taken as the seed.
+        Contains true urbanization for observed years in a
+        (years, nrows, ncols) array.
+        The first element [0] is the taken as the seed.
     urban_years: List
         List of years with available true urbanization state
-        stored in grds_urban, with the same order as that of the first dimension
-        on grds_urban.
+        stored in grds_urban, with the same order as that of the first
+        dimension on grds_urban.
     grd_slope : np.array
         Array with slope values.
     grd_excluded : np.array
@@ -280,7 +284,7 @@ def grow(grid_MC,
         # Reset urbanization attempts data structure
         urb_attempt.reset()
 
-        logger.info(f'  {year}|{record.year}/{nyears}')
+        # logger.info(f'  {record.year}|{year}/{nyears}')
         record.monte_carlo += 1
 
         # Apply CA rules for current year
@@ -333,7 +337,7 @@ def grow(grid_MC,
         if record.year in urban_years:
             grd_urban = grds_urban[urban_years.index(record.year)]
             record.this_year.leesalee = (
-                np.loagical_and(grd_Z, grd_urban).sum(dtype=float)
+                np.logical_and(grd_Z, grd_urban).sum(dtype=float)
                 / np.logical_or(grd_Z, grd_urban).sum(dtype=float)
             )
         else:
@@ -343,12 +347,12 @@ def grow(grid_MC,
         grid_MC[year][grd_Z > 0] += 1
 
         # Do self modification
-        (coef_diffusion, coef_breed,
-         coef_spread, coef_slope, coef_road) = coef_self_modification(
-             coef_diffusion, coef_breed, coef_spread, coef_slope, coef_road,
-             boom, bust, sens_slope, sens_road,
-             record.this_year.growth_rate, record.this_year.percent_urban,
-             critical_high, critical_low)
+        # (coef_diffusion, coef_breed,
+        #  coef_spread, coef_slope, coef_road) = coef_self_modification(
+        #      coef_diffusion, coef_breed, coef_spread, coef_slope, coef_road,
+        #      boom, bust, sens_slope, sens_road,
+        #      record.this_year.growth_rate, record.this_year.percent_urban,
+        #      critical_high, critical_low)
 
         # Store modified coefficients
         record.this_year.diffusion_mod = coef_diffusion
@@ -509,8 +513,8 @@ def phase1n3(grd_Z, grd_delta, grd_slope, grd_excluded,
 
     """
 
-    assert C.MIN_DIFFUSION <= coef_diffusion <= C.MAX_DIFFUSION
-    assert C.MIN_BREED <= coef_breed <= C.MAX_BREED
+    assert 0 <= coef_diffusion <= 100
+    assert 0 <= coef_breed <= 100
 
     nrows, ncols = grd_slope.shape
 
@@ -539,7 +543,7 @@ def phase1n3(grd_Z, grd_delta, grd_slope, grd_excluded,
 
     # Spontaneous growth
     # Update available pixels in delta grid
-    grd_delta[coords[:, 0], coords[:, 1]] = C.PHASE1G
+    grd_delta[coords[:, 0], coords[:, 1]] = 1
 
     # Grow new urban centers wit probability given by breed
     # Filter candidate new centers
@@ -565,7 +569,7 @@ def phase1n3(grd_Z, grd_delta, grd_slope, grd_excluded,
         # Log number of urbanizable pixels in phase 3 (sdc)
         sdc += len(ncoords)
         # Update delta grid with values for phase 3
-        grd_delta[ncoords[:, 0], ncoords[:, 1]] = C.PHASE3G
+        grd_delta[ncoords[:, 0], ncoords[:, 1]] = 1
 
     return sng, sdc
 
@@ -644,7 +648,7 @@ def phase4(grd_Z, grd_delta, grd_slope, grd_excluded,
              mode='constant', output=n_nbrs[1:-1, 1:-1])
     n_nbrs[1:-1, 1:-1] += 8
 
-    # Spread centers are urban pixels wirh 2-7 neighbors
+    # Spread centers are urban pixels with 2-7 neighbors
     # Obtain their indices
     sprd_centers = np.logical_and(n_nbrs >= 2, n_nbrs <= 7)
     sprd_ci, sprd_cj = np.where(sprd_centers)
@@ -652,7 +656,7 @@ def phase4(grd_Z, grd_delta, grd_slope, grd_excluded,
     # Apply breed test, for coef=100, all growth is accepted
     # Breed coef is the percentage of urban centers (pixels)
     #  that will attempt to urbanize a neighbor.
-    mask = prng.integers(101, size=len(sprd_ci)) <= coef_spread
+    mask = prng.integers(100, size=len(sprd_ci)) < coef_spread
     sprd_ci, sprd_cj = sprd_ci[mask], sprd_cj[mask]
 
     # Choose a random neighbor and attempt urbanization
@@ -678,7 +682,7 @@ def phase4(grd_Z, grd_delta, grd_slope, grd_excluded,
             prng, urb_attempt)
         if mask[0]:
             # Urbanize in delta grid
-            grd_delta[ncoords[0, 0], ncoords[0, 1]] = C.PHASE4G
+            grd_delta[ncoords[0, 0], ncoords[0, 1]] = 1
             # Log number of urbanizable pixels in phase 4 (og)
             og += 1
 
@@ -698,9 +702,9 @@ def phase5(grd_Z, grd_delta, grd_slope, grd_excluded,
     urbanize pixels at the road near new urbanizations.
     For each succesful road urbanization, it then attempts to grow a new urban
     center.
-    Takes the existing urbanization in the DELTA grid and writes new urbanization
-    into the delta grid. The Z grid is still needed as to not overwrite previous
-    urbanization unnecessarily.
+    Takes the existing urbanization in the DELTA grid and writes new
+    urbanization into the delta grid. The Z grid is still needed as to not
+    overwrite previous urbanization unnecessarily.
 
     Parameters
     ----------
@@ -742,15 +746,15 @@ def phase5(grd_Z, grd_delta, grd_slope, grd_excluded,
 
     """
 
-    assert coef_road > 0
-    assert coef_diffusion > 0
-    assert coef_breed > 0
+    assert coef_road >= 0
+    assert coef_diffusion >= 0
+    assert coef_breed >= 0
 
     # calculate tha maximum distance to search for a road
     # this is the chebyshev distance and is precomputed in grid
     # maxed at ~ 1/32 image perimeter
     nrows, ncols = grd_delta.shape
-    max_dist = int(coef_road/C.MAX_ROAD
+    max_dist = int(coef_road/100
                    * (nrows + ncols)/16.0)
     # number of neighbors up to distance max_dist
     # useless in our code, but original SLEUTH uses this to
@@ -787,7 +791,7 @@ def phase5(grd_Z, grd_delta, grd_slope, grd_excluded,
 
     # Search for nearest road, and select only if road is close enough
     dists = grd_road_dist[coords[:, 0], coords[:, 1]]
-    coords = coords[dists <= max_dist]
+    coords = coords[dists < max_dist]
     road_i = grd_road_i[coords[:, 0], coords[:, 1]]
     road_j = grd_road_j[coords[:, 0], coords[:, 1]]
     rcoords = np.column_stack([road_i, road_j])
@@ -827,7 +831,7 @@ def phase5(grd_Z, grd_delta, grd_slope, grd_excluded,
     # Log successes
     rt = len(new_sites)
     # Update available pixels in delta grid
-    grd_delta[new_sites[:, 0], new_sites[:, 1]] = C.PHASE5G
+    grd_delta[new_sites[:, 0], new_sites[:, 1]] = 1
 
     # Attempt to create new urban centers, urbanize 2 neighbors
     for i, j in new_sites:
@@ -842,7 +846,7 @@ def phase5(grd_Z, grd_delta, grd_slope, grd_excluded,
         ncoords = ncoords[mask][:2]
         rt += len(ncoords)
         # Update delta grid with values for phase 5
-        grd_delta[ncoords[:, 0], ncoords[:, 1]] = C.PHASE5G
+        grd_delta[ncoords[:, 0], ncoords[:, 1]] = 1
 
     return rt
 
@@ -1021,7 +1025,7 @@ def slope_weight(slope, slp_res, critical_slp):
 
     slope = np.asarray(slope)
     val = ((critical_slp - slope)/critical_slp)
-    exp = (2*slp_res/C.MAX_SLOPE_RESISTANCE)
+    exp = (2*slp_res/100)
     slope_w = np.where(slope >= critical_slp, 0, val)
     slope_w = 1.0 - slope_w**exp
 

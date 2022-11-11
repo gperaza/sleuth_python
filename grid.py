@@ -41,14 +41,22 @@ def load_raster(fpath, raster_to_match, name=None, squeeze=True,
 
     raster = rxr.open_rasterio(fpath, default_name=name)
 
-    if raster_to_match is None:
-        # Reprojecto to UTM
-        raster = raster.rio.reproject(
-            dst_crs=raster.rio.estimate_utm_crs(),
-            resolution=100,
-            nodata=nodata,
-            resampling=resampling)
-    else:
+    # if raster_to_match is None:
+    #     # Reprojecto to UTM
+    #     raster = raster.rio.reproject(
+    #         dst_crs=raster.rio.estimate_utm_crs(),
+    #         resolution=100,
+    #         nodata=nodata,
+    #         resampling=resampling)
+    if raster_to_match is not None:
+        dif_crs = raster_to_match.rio.crs.to_string() != raster.rio.crs.to_string()
+        dif_bounds = raster_to_match.rio.bounds() != raster.rio.bounds()
+        dif_res = raster_to_match.rio.resolution() != raster.rio.resolution()
+        # print(dif_crs, dif_bounds, dif_res)
+    if (
+            (raster_to_match is not None)
+            and (dif_crs or dif_bounds or dif_res)
+    ):
         raster = raster.rio.reproject_match(
             raster_to_match, nodata=nodata, resampling=resampling)
 
@@ -84,7 +92,7 @@ def store_metadata(xarr, fname, hist=True):
     xarr.attrs['resolution'] = xarr.rio.resolution()
     xarr.attrs['bounds'] = xarr.rio.bounds()
     xarr.attrs['sum'] = xarr.sum().item()
-    xarr.attrs['crs'] = xarr.rio.crs.to_epsg()
+    xarr.attrs['crs'] = xarr.rio.crs.to_string()
     xarr.attrs['type'] = xarr.dtype
     if hist:
         xarr.attrs['histogram'] = Counter(xarr.values.ravel())
@@ -146,8 +154,6 @@ def create_road_raster(input_dir, raster_to_match, d_metric=np.inf):
     # with a column named 'weight' indicating road
     # accesibility, the following codes correspond
     # to OSM road types
-
-    input_dir = Path(input_dir)
 
     # https://wiki.openstreetmap.org/wiki/Key:highway
     road_types_dict = {
@@ -354,8 +360,7 @@ def load_road_raster(input_dir, raster_to_match):
     return roads, road_i, road_j, road_dist
 
 
-def load_excluded_raster(input_dir, raster_to_match, nodata,
-                         excluded_list=['protected.tif', 'water.tif']):
+def load_excluded_raster(input_dir, raster_to_match, nodata):
     """Loads rasters denoting excluded areas.
 
     The excluded image defines all locations that are resistant to
@@ -369,6 +374,9 @@ def load_excluded_raster(input_dir, raster_to_match, nodata,
     could be an example: Development is not likely, but there is no
     zoning to prevent it.
 
+    Water raster refers to the fraction of the pixel occupied by water.
+    Threshold water pixels to those with more than half content of water.
+
     Parameters
     ----------
     input_dir : Path
@@ -376,9 +384,6 @@ def load_excluded_raster(input_dir, raster_to_match, nodata,
     raster_to_match : DataArray
         DataArray with raster to which to match geotransform
         and bounds
-    exclided_list: List
-        list of raster filenames with exclided area information to
-        include, it is assume values > 0 are excluded
 
     Returns
     -------
@@ -387,11 +392,16 @@ def load_excluded_raster(input_dir, raster_to_match, nodata,
 
     """
 
-    rasters = [load_raster(
-        input_dir / f, raster_to_match,
-        nodata=nodata, resampling=Resampling.mode)
-               for f in excluded_list]
-    rasters_bool = [r > 0 for r in rasters]
+    protected = load_raster(input_dir / 'protected.tif',
+                            raster_to_match, nodata=nodata,
+                            resampling=Resampling.mode)
+    water = load_raster(input_dir / 'water.tif',
+                        raster_to_match, nodata=nodata,
+                        resampling=Resampling.average)
+    rasters_bool = [
+        protected > 0,
+        water > 0.5
+    ]
 
     excluded = reduce(np.logical_or, rasters_bool).astype(np.int32)
     orig_attrs = excluded['spatial_ref'].attrs
@@ -399,8 +409,8 @@ def load_excluded_raster(input_dir, raster_to_match, nodata,
     excluded = xr.where(excluded == 0, excluded, 100, keep_attrs=True)
     excluded['spatial_ref'].attrs = orig_attrs
     excluded.name = 'excluded'
-    logger.info(f"Loaded excluded tifs: {excluded_list}")
-    store_metadata(excluded, excluded_list)
+    logger.info("Loaded excluded tifs: protected.tif, water.tif")
+    store_metadata(excluded, ['protected.tif', 'water.tif'])
     excluded.attrs['num_exc_pix'] = (excluded > 99).sum().item()
     excluded.attrs['num_nonexc_pix'] = (excluded == 0).sum().item()
     excluded.attrs['exc_percent'] = excluded.attrs['num_exc_pix']/excluded.size
@@ -417,7 +427,7 @@ def load_excluded_raster(input_dir, raster_to_match, nodata,
     return excluded
 
 
-def load_urban_raster(input_dir, raster_to_match, nodata, slug='gisa'):
+def load_urban_raster(input_dir, raster_to_match, nodata, slug='urban'):
     """Loads rasters denoting urbanized areas.
 
     For calibration, the earliest urban year is used as the seed, and
@@ -436,6 +446,8 @@ def load_urban_raster(input_dir, raster_to_match, nodata, slug='gisa'):
     raster_to_match : DataArray
         DataArray with raster to which to match geotransform
         and bounds
+    nodata : int
+        Value for encoding missing data.
     slug: str
         pattern used to identified urban files using their filename
 
@@ -445,12 +457,22 @@ def load_urban_raster(input_dir, raster_to_match, nodata, slug='gisa'):
         DataArray with urban pixel values
 
     """
+
     urban_files = sorted(list(input_dir.glob(f'{slug}*.tif')))
     urban_years = [get_year_fpath(f) for f in urban_files]
     urban_arrays = [load_raster(
         f, raster_to_match, nodata=nodata, name='urban',
         resampling=Resampling.mode)
                     for f in urban_files]
+
+    # Test shape and bounds
+    bounds = urban_arrays[0].rio.bounds()
+    shape = urban_arrays[0].rio.shape
+    crs = urban_arrays[0].rio.crs.to_string()
+    for urb_ar in urban_arrays:
+        assert urb_ar.rio.bounds() == bounds
+        assert urb_ar.rio.shape == shape
+        assert urb_ar.rio.crs.to_string() == crs
 
     year_attr_dict = {}
     for year, raster, fname in zip(urban_years, urban_arrays, urban_files):
@@ -486,7 +508,8 @@ def load_urban_raster(input_dir, raster_to_match, nodata, slug='gisa'):
 
 def get_year_fpath(fpath):
     """ Extract year from an input raster file name. """
-    return int(str(fpath).split('-')[-1].split('.')[0])
+
+    return int(str(fpath).split('_')[-1].split('.')[0])
 
 
 def igrid_init(input_dir):
@@ -502,17 +525,13 @@ def igrid_init(input_dir):
     # We need to load the GHS raster first as they set
     # the projection.
 
-    # We now load slope first, reprojecting to UTM, with
-    # resolution 100. Then we match the slope raster.
-    # We still need to solve the utm empty bands problem.
-    slope = load_slope_raster(input_dir, raster_to_match=None, nodata=0.0)
-    roads, road_i, road_j, road_dist = create_road_raster(
-        input_dir, raster_to_match=slope)
-    excluded = load_excluded_raster(input_dir, raster_to_match=slope,
-                                    nodata=0)
-    urban = load_urban_raster(input_dir, raster_to_match=slope,
+    urban = load_urban_raster(input_dir, raster_to_match=None,
                               nodata=0)
-
+    slope = load_slope_raster(input_dir, raster_to_match=urban, nodata=0.0)
+    roads, road_i, road_j, road_dist = create_road_raster(
+        input_dir, raster_to_match=urban)
+    excluded = load_excluded_raster(input_dir, raster_to_match=urban,
+                                    nodata=0)
     grids = [urban, slope, roads, road_i, road_j, road_dist, excluded]
 
     # Search for land class definition file
@@ -530,20 +549,20 @@ def igrid_init(input_dir):
     #     grids.append(landcover)
 
     # Create empty Z grid where urbanization takes place
-    z = xr.DataArray(
-        data=np.zeros_like(urban[0].values),
-        coords=slope.coords,
-        name='Z'
-    )
-    grids.append(z)
+    # z = xr.DataArray(
+    #     data=np.zeros_like(urban[0].values),
+    #     coords=slope.coords,
+    #     name='Z'
+    # )
+    # grids.append(z)
 
     # Create delta grid for temporal urbanization storage
-    delta = xr.DataArray(
-        data=np.zeros_like(urban[0].values),
-        coords=slope.coords,
-        name='delta'
-    )
-    grids.append(delta)
+    # delta = xr.DataArray(
+    #     data=np.zeros_like(urban[0].values),
+    #     coords=slope.coords,
+    #     name='delta'
+    # )
+    # grids.append(delta)
 
     igrid = xr.merge(grids)
     igrid.attrs['nrows'] = slope.shape[0]

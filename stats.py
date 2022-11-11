@@ -64,7 +64,7 @@ class Record:
             new_sum = prev_sum + (value - prev_mean)*(value - new_mean)
 
             setattr(self.average, f.name, new_mean)
-            setattr(self.sum_sqs, f.name, new_sum)
+            setattr(self.std, f.name, new_sum)
 
     def compute_std(self):
         for f in fields(self.this_year):
@@ -72,8 +72,8 @@ class Record:
             setattr(self.std, f.name, np.sqrt(sum_sq/self.monte_carlo))
 
     def init_output_file(self, out_path):
-        with open(out_path / f'records_run_{self.run}.csv', 'w') as f:
-            f.write('run,year,mc')
+        with open(out_path / 'records.csv', 'w') as f:
+            f.write('year,mc')
             for fld in fields(self.average):
                 f.write(f',{fld.name}_mean')
             for fld in fields(self.std):
@@ -81,8 +81,8 @@ class Record:
             f.write('\n')
 
     def write_fields(self, out_path):
-        with open(out_path / f'records_run_{self.run}.csv', 'a') as f:
-            f.write(f'{self.run},{self.year},{self.mc}')
+        with open(out_path / 'records.csv', 'a') as f:
+            f.write(f'{self.year},{self.monte_carlo}')
             for fld in fields(self.average):
                 f.write(f',{getattr(self.average, fld.name)}')
             for fld in fields(self.std):
@@ -104,7 +104,7 @@ class UrbAttempt:
 
 
 def compute_base_stats(grid, output_dir):
-    urban_years = list(grid['urban'].year)
+    urban_years = list(grid['urban'].year.values)
     stats_vals = [StatsVal() for year in urban_years]
 
     for i, year in enumerate(urban_years):
