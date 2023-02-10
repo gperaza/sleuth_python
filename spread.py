@@ -518,7 +518,7 @@ def phase1n3(grd_Z, grd_delta, grd_slope, grd_excluded,
 
     nrows, ncols = grd_slope.shape
 
-    # Diffusion value is at most 5% of image diagonal
+    # Diffusion value is at most 50% of image diagonal
     # Diffusion values is the number of candidate pixels to urbanize
     diffusion_val = int((coef_diffusion * 0.005)
                         * np.sqrt(nrows**2 + ncols**2))
@@ -547,7 +547,7 @@ def phase1n3(grd_Z, grd_delta, grd_slope, grd_excluded,
 
     # Grow new urban centers wit probability given by breed
     # Filter candidate new centers
-    coords = coords[prng.integers(101, size=len(coords))
+    coords = coords[prng.integers(100, size=len(coords))
                     < coef_breed]
     sdc = 0
     for i, j in coords:
