@@ -1,4 +1,3 @@
-import sys
 import argparse
 import configparser
 # from timer import timers
@@ -105,6 +104,9 @@ def main():
         write_mc = False
         calibrating = True
         write_records = False
+        write_iter = False
+        if optimizer == 'grid_search':
+            write_iter = True
         # Create control file
         with open(output_dir / 'control.csv', 'w') as f:
             # Write header
@@ -115,11 +117,12 @@ def main():
                     'avg_slope,percent_urban,xmean,ymean,rad,'
                     'product,osm\n')
 
-    elif mode == 'predicting':
+    elif mode == 'predict':
         start_year = urban_years[-1]
         write_mc = True
         calibrating = False
         write_records = True
+        write_iter = False
     else:
         raise ValueError("Mode not supported.")
 
@@ -149,62 +152,56 @@ def main():
         prng=prng,
         out_path=output_dir,
         write_mc=write_mc,
-        write_records=write_records
+        write_records=write_records,
+        write_iter=write_iter,
     )
 
     if calibrating:
-        # SE is unknown so just partial driver, it returns osm as float.
-        def driver_eval_f(parameterization):
-            diffusion = parameterization.get('diffusion')
-            breed = parameterization.get('breed')
-            spread = parameterization.get('spread')
-            slope = parameterization.get('slope')
-            road = parameterization.get('road')
-            osm = driver(coef_diffusion=diffusion,
-                         coef_breed=breed,
-                         coef_spread=spread,
-                         coef_slope=slope,
-                         coef_road=road)
-            return osm
-
-        best_parameters, values, experiment, model = optimize(
-            parameters=[
-                {'name': 'diffusion',
-                 'type': 'range',
-                 'bounds': [1.0, 100.0],
-                 'value_type': 'float',
-                 },
-                {'name': 'breed',
-                 'type': 'range',
-                 'bounds': [1.0, 100.0],
-                 'value_type': 'float',
-                 },
-                {'name': 'spread',
-                 'type': 'range',
-                 'bounds': [1.0, 100.0],
-                 'value_type': 'float',
-                 },
-                {'name': 'slope',
-                 'type': 'range',
-                 'bounds': [1.0, 100.0],
-                 'value_type': 'float',
-                 },
-                {'name': 'road',
-                 'type': 'range',
-                 'bounds': [1.0, 100.0],
-                 'value_type': 'float',
-                 }
-            ],
-            experiment_name="sleuth",
-            objective_name="osm",
-            evaluation_function=driver_eval_f,
-            minimize=False,
-            total_trials=100
-        )
-        print(best_parameters)
-        print(values)
+        if optimizer == 'ax':
+            optimize_ax(driver)
+        elif optimizer == 'grid_search':
+            grid_search(driver)
+    else:
+        raise NotImplementedError
 
     # timers.TOTAL_TIME.stop()
+
+
+def grid_search(eval_f):
+    best_osm = 0
+    best_diffusion = 0
+    best_breed = 0
+    best_spread = 0
+    best_slope = 0
+    best_road = 0
+    i = 0
+    test_points = [50]
+    for diff, breed, sprd, slp, rd in product(test_points, repeat=5):
+        i += 1
+        if i % 10 == 0:
+            print(f'{i}/3125')
+        osm = eval_f(
+            coef_diffusion=diff,
+            coef_breed=breed,
+            coef_spread=sprd,
+            coef_slope=slp,
+            coef_road=rd
+        )
+        if osm > best_osm:
+            best_osm = osm
+            best_diffusion = diff
+            best_breed = breed
+            best_spread = sprd
+            best_slope = slp
+            best_road = rd
+            print(f'New best: osm={best_osm}')
+    print(
+        f'{best_diffusion =}',
+        f'{best_breed =}',
+        f'{best_spread =}',
+        f'{best_slope =}',
+        f'{best_road =}',
+    )
 
 
 def optimize_gridded(eval_f):
@@ -239,25 +236,57 @@ def optimize_gridded(eval_f):
     return best_diffusion, best_breed, best_spread, best_slope, best_road
 
 
-def optimize_ax():
-    # Bayesian optimization with Facebook's Ax
-    # Create evaluation function
+def optimize_ax(eval_f):
+    # SE is unknown so just partial driver, it returns osm as float.
+    def driver_eval_f(parameterization):
+        diffusion = parameterization.get('diffusion')
+        breed = parameterization.get('breed')
+        spread = parameterization.get('spread')
+        slope = parameterization.get('slope')
+        road = parameterization.get('road')
+        osm = eval_f(coef_diffusion=diffusion,
+                     coef_breed=breed,
+                     coef_spread=spread,
+                     coef_slope=slope,
+                     coef_road=road)
+        return osm
 
-    # Create tunable parameters
-
-    # Peform optimization
-
-    pass
-
-
-def optimize_cd():
-    # Simple coordinate descent
-    pass
-
-
-def optimize_local_search():
-    # Local hill climbing
-    pass
+    best_parameters, values, experiment, model = optimize(
+        parameters=[
+            {'name': 'diffusion',
+             'type': 'range',
+             'bounds': [1.0, 100.0],
+             'value_type': 'float',
+             },
+            {'name': 'breed',
+             'type': 'range',
+             'bounds': [1.0, 100.0],
+             'value_type': 'float',
+             },
+            {'name': 'spread',
+             'type': 'range',
+             'bounds': [1.0, 100.0],
+             'value_type': 'float',
+             },
+            {'name': 'slope',
+             'type': 'range',
+             'bounds': [1.0, 100.0],
+             'value_type': 'float',
+             },
+            {'name': 'road',
+             'type': 'range',
+             'bounds': [1.0, 100.0],
+             'value_type': 'float',
+             }
+        ],
+        experiment_name="sleuth",
+        objective_name="osm",
+        evaluation_function=driver_eval_f,
+        minimize=False,
+        total_trials=100
+    )
+    print(best_parameters)
+    print(values)
 
 
 if __name__ == '__main__':

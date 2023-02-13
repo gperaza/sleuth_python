@@ -2,6 +2,7 @@ import numpy as np
 from scipy.ndimage import convolve, label, center_of_mass
 from logconf import logger
 from dataclasses import dataclass, fields, field
+from pathlib import Path
 
 
 @dataclass
@@ -60,8 +61,8 @@ class Record:
             prev_mean = getattr(self.average, f.name)
             prev_sum = getattr(self.std, f.name)
 
-            new_mean = prev_mean + (value - prev_mean)/self.monte_carlo
-            new_sum = prev_sum + (value - prev_mean)*(value - new_mean)
+            new_mean = prev_mean + (value - prev_mean) / self.monte_carlo
+            new_sum = prev_sum + (value - prev_mean) * (value - new_mean)
 
             setattr(self.average, f.name, new_mean)
             setattr(self.std, f.name, new_sum)
@@ -69,7 +70,7 @@ class Record:
     def compute_std(self):
         for f in fields(self.this_year):
             sum_sq = getattr(self.std, f.name)
-            setattr(self.std, f.name, np.sqrt(sum_sq/self.monte_carlo))
+            setattr(self.std, f.name, np.sqrt(sum_sq / self.monte_carlo))
 
     def init_output_file(self, out_path):
         with open(out_path / 'records.csv', 'w') as f:
@@ -80,6 +81,13 @@ class Record:
                 f.write(f',{fld.name}_std')
             f.write('\n')
 
+    def init_iter_file(self, out_path):
+        with open(out_path / 'iterations.csv', 'w') as f:
+            f.write('year,mc')
+            for fld in fields(self.this_year):
+                f.write(f',{fld.name}')
+            f.write('\n')
+
     def write_fields(self, out_path):
         with open(out_path / 'records.csv', 'a') as f:
             f.write(f'{self.year},{self.monte_carlo}')
@@ -87,6 +95,13 @@ class Record:
                 f.write(f',{getattr(self.average, fld.name)}')
             for fld in fields(self.std):
                 f.write(f',{getattr(self.std, fld.name)}')
+            f.write('\n')
+
+    def write_iter(self, out_path):
+        with open(out_path / 'iterations.csv', 'a') as f:
+            f.write(f'{self.year},{self.monte_carlo}')
+            for fld in fields(self.this_year):
+                f.write(f',{getattr(self.this_year, fld.name)}')
             f.write('\n')
 
 
@@ -109,24 +124,29 @@ def compute_base_stats(grid, output_dir):
 
     for i, year in enumerate(urban_years):
         stats_val = stats_vals[i]
-        (stats_val.edges,
-         stats_val.clusters,
-         stats_val.pop,
-         stats_val.xmean,
-         stats_val.ymean,
-         stats_val.slope,
-         stats_val.rad,
-         stats_val.mean_cluster_size,
-         stats_val.percent_urban) = compute_stats(
-             grid.urban.sel(year=year).values, grid.slope.values)
+        (
+            stats_val.edges,
+            stats_val.clusters,
+            stats_val.pop,
+            stats_val.xmean,
+            stats_val.ymean,
+            stats_val.slope,
+            stats_val.rad,
+            stats_val.mean_cluster_size,
+            stats_val.percent_urban
+        ) = compute_stats(grid.urban.sel(year=year).values, grid.slope.values)
 
     with open(output_dir / 'base_stats.csv', 'w') as f:
-        f.write('year,edges,clusters,pop,xmean,ymean,slope,'
-                'rad,mean_cluster_size,percent_urban\n')
+        f.write(
+            'year,edges,clusters,pop,xmean,ymean,slope,'
+            'rad,mean_cluster_size,percent_urban\n'
+        )
         for year, sv in zip(urban_years, stats_vals):
-            f.write(f'{year},{sv.edges},{sv.clusters},{sv.pop},'
-                    f'{sv.xmean},{sv.ymean},{sv.slope},{sv.rad},'
-                    f'{sv.mean_cluster_size},{sv.percent_urban}\n')
+            f.write(
+                f'{year},{sv.edges},{sv.clusters},{sv.pop},'
+                f'{sv.xmean},{sv.ymean},{sv.slope},{sv.rad},'
+                f'{sv.mean_cluster_size},{sv.percent_urban}\n'
+            )
     logger.info('Base stats saved.')
 
     return stats_vals, urban_years
@@ -138,7 +158,7 @@ def compute_stats(urban, slope):
     # orginal sleuth code discounts roads and excluded pixels
     # and include roads pixels as urban, which seems weird
     # anyhow, since excluded and roads are fixed, this just rescales
-    percent_urban = area/np.prod(urban.size)*100
+    percent_urban = area / np.prod(urban.size) * 100
 
     # number of pixels on urban edge
     edges = count_edges(urban)
@@ -147,7 +167,7 @@ def compute_stats(urban, slope):
     clusters, nclusters = label(urban)
     assert nclusters > 0
 
-    mean_cluster_size = area/nclusters
+    mean_cluster_size = area / nclusters
 
     avg_slope = slope[urban > 0].mean()
 
@@ -159,9 +179,17 @@ def compute_stats(urban, slope):
 
     # Returns a dict of statistics
     # Seems pop and area are the same in orginal SLEUTH code
-    return (edges, nclusters, area,
-            xmean, ymean, avg_slope, rad,
-            mean_cluster_size, percent_urban)
+    return (
+        edges,
+        nclusters,
+        area,
+        xmean,
+        ymean,
+        avg_slope,
+        rad,
+        mean_cluster_size,
+        percent_urban
+    )
 
 
 def count_edges(urban):
@@ -177,8 +205,7 @@ def count_edges(urban):
     # for 2D images
     # signal.convolve is more general and handles ndim arrays
     # TODO: splicitly pass output array to save memory
-    conv = convolve(urban, kernel,
-                    mode='constant', output=int)
+    conv = convolve(urban, kernel, mode='constant', output=int)
 
     edges = (conv < 0).sum()
 
