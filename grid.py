@@ -579,17 +579,7 @@ def igrid_init(input_dir):
     # logger.error(f"   Last landuse year = {}, last urban year = {}.")
 
     # Generate sets of urbanized and excluded pixels for fast lookup
-    excPix = set()
-    urbPix = set()
 
     logger.info("Data Input Files: OK")
 
     return igrid
-
-
-def build_pix_set(array):
-    pix_set = set()
-    # Builds a lookup set of active pixels
-    # TODO use xr.where and add coords to set
-
-    return pix_set

@@ -47,10 +47,34 @@ class StatsVal:
 @dataclass
 class Record:
     year: int
+    diffusion: int
+    breed: int
+    spread: int
+    slope: int
+    road: int
+    write_records: bool
+    write_iter: bool
+    out_path: Path
     monte_carlo: int = 0
     this_year: StatsVal = field(default_factory=StatsVal)
     average: StatsVal = field(default_factory=StatsVal)
     std: StatsVal = field(default_factory=StatsVal)
+    record_file: Path = field(init=False)
+    iters_file: Path = field(init=False)
+
+    def __post_init__(self):
+        fslug = (
+            f'_diffusion_{self.diffusion}'
+            f'_breed_{self.breed}'
+            f'_spread_{self.spread}'
+            f'_slope_{self.slope}'
+            f'_road_{self.road}'
+        )
+        self.record_file = Path(self.out_path / f'records{fslug}.csv')
+        self.iters_file = Path(self.out_path / f'iterations{fslug}.csv')
+
+        self.init_iter_file()
+        self.init_output_file()
 
     def update_mean_std(self):
         # Update the mean and sum of squares using
@@ -72,8 +96,8 @@ class Record:
             sum_sq = getattr(self.std, f.name)
             setattr(self.std, f.name, np.sqrt(sum_sq / self.monte_carlo))
 
-    def init_output_file(self, out_path):
-        with open(out_path / 'records.csv', 'w') as f:
+    def init_output_file(self):
+        with open(self.record_file, 'w') as f:
             f.write('year,mc')
             for fld in fields(self.average):
                 f.write(f',{fld.name}_mean')
@@ -81,15 +105,17 @@ class Record:
                 f.write(f',{fld.name}_std')
             f.write('\n')
 
-    def init_iter_file(self, out_path):
-        with open(out_path / 'iterations.csv', 'w') as f:
+    def init_iter_file(self):
+        with open(self.iters_file, 'w') as f:
             f.write('year,mc')
             for fld in fields(self.this_year):
                 f.write(f',{fld.name}')
             f.write('\n')
 
-    def write_fields(self, out_path):
-        with open(out_path / 'records.csv', 'a') as f:
+    def write_fields(self):
+        if not self.write_records:
+            return
+        with open(self.record_file, 'a') as f:
             f.write(f'{self.year},{self.monte_carlo}')
             for fld in fields(self.average):
                 f.write(f',{getattr(self.average, fld.name)}')
@@ -97,8 +123,10 @@ class Record:
                 f.write(f',{getattr(self.std, fld.name)}')
             f.write('\n')
 
-    def write_iter(self, out_path):
-        with open(out_path / 'iterations.csv', 'a') as f:
+    def write_iteration(self):
+        if not self.write_iter:
+            return
+        with open(self.iters_file, 'a') as f:
             f.write(f'{self.year},{self.monte_carlo}')
             for fld in fields(self.this_year):
                 f.write(f',{getattr(self.this_year, fld.name)}')
@@ -118,8 +146,14 @@ class UrbAttempt:
             setattr(self, f.name, 0)
 
 
-def compute_base_stats(grid, output_dir):
+def compute_base_stats(grid, output_dir, start_year):
+
     urban_years = list(grid['urban'].year.values)
+    assert start_year in urban_years
+    start_idx = urban_years.index(start_year)
+    urban_years = urban_years[start_idx:]
+    assert len(urban_years) >= 4
+
     stats_vals = [StatsVal() for year in urban_years]
 
     for i, year in enumerate(urban_years):
