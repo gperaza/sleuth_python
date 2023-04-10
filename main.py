@@ -10,7 +10,7 @@ from functools import partial
 import subprocess
 import stats
 import spread
-from ax.service.managed_loop import optimize
+# from ax.service.managed_loop import optimize
 from itertools import product
 from ast import literal_eval
 
@@ -52,7 +52,7 @@ def main():
     config = configparser.ConfigParser()
     config.read(ini_path)
 
-    mode = Path(config['DEFAULT']['MODE'])
+    mode = config['DEFAULT']['MODE']
     logger.info(f'Excecuting in mode: {mode}')
 
     input_dir = Path(config['DEFAULT']['INPUT_DIR'])
@@ -151,9 +151,17 @@ def main():
         calibrating = True
         write_records = False
         write_iter = False
-        if optimizer == 'grid_search':
-            write_iter = False
-
+    elif mode == 'derive_coefs':
+        # Average forecasting coefficients at the end of
+        # historic growth.
+        # Since coefficients may change due to self modification,
+        # the best set of forecasting coefficients is the average
+        # of 100 iterations at the end of the observed period.
+        stop_year = urban_years[-1]
+        write_mc = False
+        calibrating = True
+        write_records = False
+        write_iter = False
     elif mode == 'predict':
         start_year = urban_years[-1]
         write_mc = True
@@ -162,6 +170,10 @@ def main():
         write_iter = False
     else:
         raise ValueError("Mode not supported.")
+
+    # Filter grid to years to simulate
+    urban_years = [y for y in urban_years if y >= start_year]
+    igrid = igrid.sel(year=urban_years)
 
     # Create a partial function that only accepts coefficient values
     driver = partial(
@@ -194,10 +206,10 @@ def main():
     )
 
     if calibrating:
-        if optimizer == 'ax':
-            optimize_ax(driver)
-        elif optimizer == 'grid_search':
-            grid_search(
+        # if optimizer == 'ax':
+        #     best_trial = optimize_ax(driver)
+        if optimizer == 'grid_search':
+            best_trial = grid_search(
                 driver,
                 diffusion_grid,
                 breed_grid,
@@ -205,8 +217,36 @@ def main():
                 slope_grid,
                 road_grid,
             )
+        elif optimizer == 'auto_grid':
+            best_trial = optimize_gridded(
+                driver
+            )
+            best_diff = best_trial[0]
+            best_breed = best_trial[1]
+            best_sprd = best_trial[2]
+            best_slp = best_trial[3]
+            best_rd = best_trial[4]
+
+            # TODO: Run high mc historic simulation to get
+            # averaged prediction coefs. Only useful is self_mod is activated.
+
+            # TODO: Write predict scenario file
+            config['DEFAULT']['MODE'] = 'predict'
+            config['COEFFICIENTS']['DIFFUSION'] = str(best_diff)
+            config['COEFFICIENTS']['BREED'] = str(best_breed)
+            config['COEFFICIENTS']['SPREAD'] = str(best_sprd)
+            config['COEFFICIENTS']['SLOPE'] = str(best_slp)
+            config['COEFFICIENTS']['ROAD'] = str(best_rd)
+            with open(
+                    ini_path.with_name('scenario_predict.ini'),
+                    'w'
+            ) as configfile:
+                config.write(configfile)
+
+        else:
+            raise NotImplementedError
     else:
-        raise NotImplementedError
+        pass
 
     # timers.TOTAL_TIME.stop()
 
@@ -290,63 +330,63 @@ def optimize_gridded(eval_f):
     # Need to record the best 3 values of the OSM with
     # possible ties during the calibration process
 
-    initial_grid = [1, 25, 50, 75, 100]
-    diffusion_grid = initial_grid.copy()
-    breed_grid = initial_grid.copy()
-    spread_grid = initial_grid.copy()
-    slope_grid = initial_grid.copy()
-    road_grid = initial_grid.copy()
+    # Define function to genrate trials
+    def generate_grid(p_min, p_max, n_p=5):
+        assert p_min <= p_max
+        delta = p_max - p_min
+        if delta == 0:
+            return [p_min]
+        if n_p > delta + 1:
+            n_p = delta + 1
+        step = int(delta/(n_p - 1))
+        last = step*(n_p - 1)
+        deltas = np.arange(0, last + 1, step, dtype=int)
+        remainder = delta - last
+        adjust = [0]*(n_p - remainder) + list(range(1, remainder + 1))
+        deltas += adjust
+        return deltas + p_min
 
+    # Keep two dicts, one to store all evaluated trials
+    # indexed by the coef 5-tuple to avoid reevaluating
+    # another small dict indexed by top 3 osm to keep
+    # track of best fit
+
+    trials = {}
     best_osm = {
-        0: [
-            {
-                'diffusion': 0,
-                'breed': 0,
-                'spread': 0,
-                'slope': 0,
-                'road': 0
-            }
-        ]
+        0.0: [], 0.001: [], 0.002: []
     }
 
-    for cstep in ['coarse', 'fine', 'final']:
-        total_iters = (
-            len(diffusion_grid)
-            * len(breed_grid)
-            * len(spread_grid)
-            * len(slope_grid)
-            * len(road_grid)
+    # Initialize search grids
+    grids = [
+        generate_grid(1, 100),  # diffusion
+        generate_grid(1, 100),  # breed
+        generate_grid(1, 100),  # spread
+        generate_grid(1, 100),  # slope
+        generate_grid(1, 100),  # road
+    ]
+
+    # Hierarchical loop, 3 levels
+    for cstep in range(len(['coarse', 'fine', 'final'])):
+        total_iters = np.prod(
+            [len(grid) for grid in grids]
         )
 
-        combs = product(
-            diffusion_grid,
-            breed_grid,
-            spread_grid,
-            slope_grid,
-            road_grid
-        )
+        combs = product(*[grid for grid in grids])
 
-        for i, (diff, breed, sprd, slp, rd) in enumerate(combs):
+        for i, trial in enumerate(combs):
             print(
                 f'Executing iteration {i+1}/{total_iters}'
-                f' in {cstep} calibration.'
+                f' in calibration lvl {cstep} '
+                f'with trial {trial}.'
             )
 
-            osm = eval_f(
-                coef_diffusion=diff,
-                coef_breed=breed,
-                coef_spread=sprd,
-                coef_slope=slp,
-                coef_road=rd
-            )
-
-            trial = {
-                'diffusion': diff,
-                'breed': breed,
-                'spread': sprd,
-                'slope': slp,
-                'road': rd
-            }
+            if trial in trials:
+                # If already evaluated retrieve osm
+                osm = trials[trial]
+            else:
+                osm = eval_f(*trial)
+                # Add trial to dict
+                trials[trial]: osm
 
             if osm in best_osm.keys():
                 # Check if osm ties with any top 3
@@ -360,84 +400,87 @@ def optimize_gridded(eval_f):
                 # Its al least better than first value
                 best_osm.pop(min_osm)
                 best_osm[osm] = [trial]
-                print(f'New good osm={osm}')
+                print(f'New good osm={osm} for trial {trial}.')
 
-            # Adjust grids
-            for coef in ['diffusion', 'breed', 'spread', 'slope', 'road']:
-                coef_l = [
-                    d[coef]
-                    for ll in best_osm.values()
-                    for d in ll
-                ]
-                coef_max = max(coef_l)
-                coef_min = min(coef_l)
-                coef_delta = coef_max - coef_min
-                
+        # Adjust grids
+        # Array of coefficients, row per coef
+        best_trials = np.array(
+            [i for j in best_osm.values() for i in j]
+        ).T
+        assert len(grids) == len(best_trials)
+        for i, coef in enumerate(best_trials):
+            c_min = coef.min()
+            c_max = coef.max()
+            # If single value return a finer grid
+            if c_min == c_max:
+                # Explore grid and select surrouding values
+                grid = grids[i]
+                idx = np.argwhere(grid == c_min).item()
+                c_min = grid[max(0, idx - 1)]
+                c_max = grid[min(idx + 1, len(grid) - 1)]
+            grids[i] = generate_grid(c_min, c_max)
 
-    return best_osm
+    max_osm = max(best_osm)
+    best_trials = best_osm[max_osm]
+    # Select a single trial selecting prioritizing smallest coef values
+    # as ordered in the list (dif is more importante than breed)
+    best_trial = min(best_trials)
+
+    return best_trial
 
 
-def optimize_ax(eval_f):
-    # SE is unknown so just partial driver, it returns osm as float.
-    def driver_eval_f(parameterization):
-        diffusion = parameterization.get('diffusion')
-        breed = parameterization.get('breed')
-        spread = parameterization.get('spread')
-        slope = parameterization.get('slope')
-        road = parameterization.get('road')
-        osm = eval_f(coef_diffusion=diffusion,
-                     coef_breed=breed,
-                     coef_spread=spread,
-                     coef_slope=slope,
-                     coef_road=road)
-        return osm
+# def optimize_ax(eval_f):
+#     # SE is unknown so just partial driver, it returns osm as float.
+#     def driver_eval_f(parameterization):
+#         diffusion = parameterization.get('diffusion')
+#         breed = parameterization.get('breed')
+#         spread = parameterization.get('spread')
+#         slope = parameterization.get('slope')
+#         road = parameterization.get('road')
+#         osm = eval_f(coef_diffusion=diffusion,
+#                      coef_breed=breed,
+#                      coef_spread=spread,
+#                      coef_slope=slope,
+#                      coef_road=road)
+#         return osm
 
-    best_parameters, values, experiment, model = optimize(
-        parameters=[
-            {'name': 'diffusion',
-             'type': 'range',
-             'bounds': [1.0, 100.0],
-             'value_type': 'float',
-             },
-            {'name': 'breed',
-             'type': 'range',
-             'bounds': [1.0, 100.0],
-             'value_type': 'float',
-             },
-            {'name': 'spread',
-             'type': 'range',
-             'bounds': [1.0, 100.0],
-             'value_type': 'float',
-             },
-            {'name': 'slope',
-             'type': 'range',
-             'bounds': [1.0, 100.0],
-             'value_type': 'float',
-             },
-            {'name': 'road',
-             'type': 'range',
-             'bounds': [1.0, 100.0],
-             'value_type': 'float',
-             }
-        ],
-        experiment_name="sleuth",
-        objective_name="osm",
-        evaluation_function=driver_eval_f,
-        minimize=False,
-        total_trials=100
-    )
-    print(best_parameters)
-    print(values)
+#     best_parameters, values, experiment, model = optimize(
+#         parameters=[
+#             {'name': 'diffusion',
+#              'type': 'range',
+#              'bounds': [1.0, 100.0],
+#              'value_type': 'float',
+#              },
+#             {'name': 'breed',
+#              'type': 'range',
+#              'bounds': [1.0, 100.0],
+#              'value_type': 'float',
+#              },
+#             {'name': 'spread',
+#              'type': 'range',
+#              'bounds': [1.0, 100.0],
+#              'value_type': 'float',
+#              },
+#             {'name': 'slope',
+#              'type': 'range',
+#              'bounds': [1.0, 100.0],
+#              'value_type': 'float',
+#              },
+#             {'name': 'road',
+#              'type': 'range',
+#              'bounds': [1.0, 100.0],
+#              'value_type': 'float',
+#              }
+#         ],
+#         experiment_name="sleuth",
+#         objective_name="osm",
+#         evaluation_function=driver_eval_f,
+#         minimize=False,
+#         total_trials=100
+#     )
+#     print(best_parameters)
+#     print(values)
 
 
 if __name__ == '__main__':
     main()
-
-# for delta in range(4,101):
-#      ...:     step = int(delta/4)
-#      ...:     last = step*4
-#      ...:     deltas = np.arange(0, last+1, step, dtype=int)
-#      ...:     remainder = delta - last
-#      ...:     plus = [0]*(5 - remainder) + list(range(1, remainder+1))
-#      ...:     deltas += plus
-#      ...:     print(deltas, remainder)

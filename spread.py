@@ -1,7 +1,7 @@
 import numpy as np
 # import constants as C
 from functools import reduce
-from scipy.ndimage import convolve
+# from scipy.ndimage import convolve
 # from timer import timers
 # from logconf import logger
 from stats import compute_stats

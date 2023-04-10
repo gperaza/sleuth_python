@@ -187,8 +187,8 @@ def compute_base_stats(grid, output_dir, start_year):
 
 
 def compute_stats(urban, slope):
-    # Assuming binarized urban raster
-    area = (urban > 0).sum()
+    # Assuming binarized urban raster (0/1)
+    area = urban.sum()
     # orginal sleuth code discounts roads and excluded pixels
     # and include roads pixels as urban, which seems weird
     # anyhow, since excluded and roads are fixed, this just rescales
@@ -203,7 +203,7 @@ def compute_stats(urban, slope):
 
     mean_cluster_size = area / nclusters
 
-    avg_slope = slope[urban > 0].mean()
+    avg_slope = (slope * urban).mean()
 
     # Centroid of urban pixels
     ymean, xmean = center_of_mass(urban)
