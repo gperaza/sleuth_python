@@ -246,7 +246,13 @@ def main():
         else:
             raise NotImplementedError
     else:
-        pass
+        driver(
+            coef_diffusion=coef_diffusion,
+            coef_breed=coef_breed,
+            coef_spread=coef_spread,
+            coef_slope=coef_slope,
+            coef_road=coef_road,
+                )
 
     # timers.TOTAL_TIME.stop()
 
@@ -374,7 +380,7 @@ def optimize_gridded(eval_f):
         combs = product(*[grid for grid in grids])
 
         for i, trial in enumerate(combs):
-            print(
+            logger.info(
                 f'Executing iteration {i+1}/{total_iters}'
                 f' in calibration lvl {cstep} '
                 f'with trial {trial}.'
@@ -384,7 +390,13 @@ def optimize_gridded(eval_f):
                 # If already evaluated retrieve osm
                 osm = trials[trial]
             else:
-                osm = eval_f(*trial)
+                osm = eval_f(
+                    coef_diffusion=trial[0],
+                    coef_breed=trial[1],
+                    coef_spread=trial[2],
+                    coef_slope=trial[3],
+                    coef_road=trial[4],
+                )
                 # Add trial to dict
                 trials[trial]: osm
 
@@ -400,7 +412,7 @@ def optimize_gridded(eval_f):
                 # Its al least better than first value
                 best_osm.pop(min_osm)
                 best_osm[osm] = [trial]
-                print(f'New good osm={osm} for trial {trial}.')
+                logger.info(f'New good osm={osm} for trial {trial}.')
 
         # Adjust grids
         # Array of coefficients, row per coef

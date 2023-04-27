@@ -641,11 +641,12 @@ def spread(
     # this test is only performed once per step
     # in the delta grid
     # excld value is the 100*probability of rejecting urbanization
+    # TODO: implement as boolean operation without indexing
     excld_mask = prng.random(size=grd_delta.shape)*100 < grd_excluded
     grd_delta[excld_mask] = 0
 
     # Urbanize in Z array for accumulated urbanization.
-    # TODO: Try to avoid indexing.
+    # TODO: Try to avoid indexing, implement as boolean operation.
     mask = grd_delta > 0
     grd_Z[mask] = grd_delta[mask]
     # avg_slope = grd_slope[mask].mean()
