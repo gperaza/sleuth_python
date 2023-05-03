@@ -1017,12 +1017,14 @@ def phase5(
     # Coordinates of new growth
     coords = np.array(np.where(grd_delta > 0)).T
 
+
     # Select n=breed growth candidates
-    coords = prng.choice(
-        coords,
-        size=int(coef_breed) + 1,
-        replace=True
-    )
+    if len(coords) > 0:
+        coords = prng.choice(
+            coords,
+            size=int(coef_breed) + 1,
+            replace=True
+        )
 
     # Search for nearest road, and select only if road is close enough
     dists = grd_road_dist[coords[:, 0], coords[:, 1]]
@@ -1037,7 +1039,8 @@ def phase5(
     nlist = np.array(
         (
             (-1, -1), (0, -1), (+1, -1), (+1, 0),
-            (+1, +1), (0, +1), (-1, +1), (-1, 0)
+            (+1, +1), (0, +1), (-1, +1), (-1, 0),
+            # (0, 0)  # Allows to stay in the same spot, useful if road has no neighbors
         )
     )
 
@@ -1052,6 +1055,11 @@ def phase5(
             prng.shuffle(nlist)
             nbrs = rc + nlist
             nbrs = nbrs[grd_roads[nbrs[:, 0], nbrs[:, 1]] > 0]
+            # TODO: there is a bug when a road is a single pixel and has no neighbors
+            # TODO: Fix in road preprocessing
+            # The following is a hacky patch
+            if len(nbrs) == 0:
+                break
             rc = nbrs[0]
         new_sites[i] = rc
 
