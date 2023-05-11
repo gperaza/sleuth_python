@@ -40,9 +40,9 @@ def parse_cl():
 def main():
     # timers.TOTAL_TIME.start()
 
-    githash = subprocess.check_output(
-        ['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
-    logger.info(f'Running pySLEUTH with git hash: {githash}')
+#     githash = subprocess.check_output(
+#         ['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
+#     logger.info(f'Running pySLEUTH with git hash: {githash}')
 
     # Initialize parameters
     # ini_path, mode = parse_cl()
